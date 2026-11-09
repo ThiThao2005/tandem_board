@@ -7,12 +7,31 @@ import type { ApiErrorBody, AuthResult } from "@tandem/shared";
 let accessToken: string | null = null;
 let refreshing: Promise<AuthResult | null> | null = null;
 let onSessionLost: () => void = () => {};
+const tokenListeners = new Set<(token: string | null) => void>();
+
+function setToken(token: string | null) {
+  accessToken = token;
+  for (const fn of tokenListeners) fn(token);
+}
 
 export function setAccessToken(token: string | null) {
-  accessToken = token;
+  setToken(token);
+}
+
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
+/** Báo mỗi khi access token đổi (đăng nhập, làm mới, đăng xuất). Socket dùng để gửi auth.refresh. */
+export function onAccessToken(fn: (token: string | null) => void): () => void {
+  tokenListeners.add(fn);
+  return () => tokenListeners.delete(fn);
 }
 export function setSessionLostHandler(fn: () => void) {
   onSessionLost = fn;
+}
+export function sessionLost() {
+  onSessionLost();
 }
 
 export class ApiError extends Error {
@@ -33,7 +52,7 @@ async function doRefresh(): Promise<AuthResult | null> {
     const res = await fetch("/api/auth/refresh", { method: "POST" });
     if (res.ok) {
       const data = (await res.json()) as AuthResult;
-      accessToken = data.accessToken;
+      setToken(data.accessToken);
       return data;
     }
     const body = (await res.json().catch(() => null)) as ApiErrorBody | null;
@@ -44,7 +63,7 @@ async function doRefresh(): Promise<AuthResult | null> {
     }
     break;
   }
-  accessToken = null;
+  setToken(null);
   return null;
 }
 

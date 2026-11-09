@@ -110,17 +110,17 @@ Người khác:  seq == lastSeq + 1 thì áp dụng ngay
 
 ## 6. Các trường hợp dễ lỗi (mỗi dòng là một test case)
 
-- [ ] Hai người kéo cùng một thẻ sang hai cột khác nhau cùng lúc
+- [x] Hai người kéo cùng một thẻ sang hai cột khác nhau cùng lúc
 - [x] Hai người chèn thẻ vào cùng một khe, sinh vị trí trùng (jitter)
 - [x] Kéo thẻ nhiều lần vào cùng một khe làm chuỗi vị trí dài ra (sắp xếp lại cột)
-- [ ] Gửi lại một thao tác đã tới server (opId trùng)
-- [ ] Tin nhắn đến sai thứ tự hoặc thiếu seq
+- [x] Gửi lại một thao tác đã tới server (opId trùng)
+- [x] Tin nhắn đến sai thứ tự hoặc thiếu seq
 - [ ] Offline 2 ngày, lỡ hàng nghìn thao tác (gửi ảnh chụp)
-- [ ] Bị mất quyền khi vẫn đang kết nối
-- [ ] Token hết hạn khi socket còn mở
+- [x] Bị mất quyền khi vẫn đang kết nối
+- [x] Token hết hạn khi socket còn mở
 - [ ] Tab ẩn lâu, heartbeat trễ, bị coi là offline nhầm
-- [ ] Gửi thao tác vào bảng của nhóm khác (IDOR: boardId hợp lệ + cardId của nhóm khác)
-- [ ] Hai thao tác commit lệch thứ tự seq (lý do phải đánh seq theo từng bảng)
+- [x] Gửi thao tác vào bảng của nhóm khác (IDOR: boardId hợp lệ + cardId của nhóm khác)
+- [x] Hai thao tác commit lệch thứ tự seq (lý do phải đánh seq theo từng bảng)
 - [ ] Cùng một người mở 2 tab, cả hai cùng gửi hàng đợi
 
 ## 7. Kiểm thử

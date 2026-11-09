@@ -16,24 +16,16 @@ import {
   type UniqueIdentifier,
 } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import {
-  comparePositioned,
-  positionBetween,
-  type BoardSnapshot,
-  type Card,
-  type CardMoveResult,
-  type Column,
-  type Member,
-} from "@tandem/shared";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
+import { comparePositioned, type Card, type Column, type Member, type OpRequest } from "@tandem/shared";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router";
-import { api, ApiError, errorMessage } from "../api";
 import { Avatar } from "../components/Avatar";
 import { CardDialog } from "../components/CardDialog";
 import { InlineEdit } from "../components/InlineEdit";
 import { CardFace, SortableCard } from "../components/SortableCard";
 import { toneAt, toneVars, type Tone } from "../palette";
+import type { BoardSync, SyncStatus } from "../sync/boardSync";
+import { useBoardSync } from "../sync/useBoardSync";
 import { useToast } from "../toast";
 
 /** Ý định khi thả thẻ: nằm ở cột nào, sau thẻ nào, trước thẻ nào. */
@@ -43,85 +35,50 @@ export interface MoveIntent {
   beforeCardId: string | null;
 }
 
+export type CardPatch = Partial<Pick<Card, "title" | "dueDate" | "assigneeId" | "columnId">>;
+
+const FIELD_LABEL: Record<string, string> = {
+  title: "title",
+  dueDate: "due date",
+  assigneeId: "assignee",
+  columnId: "column",
+};
+
 /**
- * Chưa có realtime: mỗi thao tác gọi REST rồi tải lại ảnh chụp bảng.
- * Riêng kéo thả thì cập nhật lạc quan: thẻ nằm ngay chỗ mới, server từ chối thì trả về chỗ cũ.
- * Tuần 3 sẽ chuyển mọi thao tác sang WebSocket.
+ * Mọi thay đổi đi qua WebSocket dưới dạng thao tác (op): hiện ngay trên màn hình (lạc quan), server
+ * quyết định rồi phát cho mọi người. Server từ chối thì bảng tự về đúng trạng thái và hiện thông báo.
  */
-export function useBoardActions(boardId: string) {
-  const qc = useQueryClient();
+export function useBoardActions(sync: BoardSync | null, boardId: string) {
   const toast = useToast();
-  const key = ["board", boardId];
-  const reload = () => qc.invalidateQueries({ queryKey: key });
+  const submit = (req: OpRequest, ctx?: Parameters<BoardSync["submit"]>[1]) => sync?.submit(req, ctx);
+  const opId = () => crypto.randomUUID();
 
-  async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
-    try {
-      return await fn();
-    } catch (err) {
-      if (err instanceof ApiError && err.code === "card_deleted") {
-        const cardId = (err.details as { cardId?: string } | undefined)?.cardId;
-        toast({
-          message: `${err.message}.`,
-          tone: "error",
-          action: cardId ? { label: "Restore", run: () => void restore(cardId) } : undefined,
-        });
-      } else if (err instanceof ApiError && err.code === "version_conflict") {
-        toast({ message: "Someone else just edited this card. Loaded the latest version.", tone: "error" });
-      } else {
-        toast({ message: errorMessage(err), tone: "error" });
-      }
-      return undefined;
-    } finally {
-      await reload();
-    }
-  }
-
-  /** Gắn id thẻ vào lỗi "thẻ đã bị xóa" để nút "Restore" biết thẻ nào. */
-  const tagDeleted = (cardId: string) => (err: unknown) => {
-    if (err instanceof ApiError && err.code === "card_deleted") err.details = { cardId };
-    throw err;
-  };
-
-  const restore = (cardId: string) => run(() => api<Card>(`/cards/${cardId}/restore`, { method: "POST" }));
+  const restore = (cardId: string, card?: Card) =>
+    submit({ opId: opId(), type: "card.restore", payload: { cardId } }, { restoreCard: card });
 
   return {
-    renameBoard: (title: string) => run(() => api(`/boards/${boardId}`, { method: "PATCH", body: { title } })),
-    addColumn: (title: string) => run(() => api(`/boards/${boardId}/columns`, { method: "POST", body: { title } })),
-    renameColumn: (id: string, title: string) => run(() => api(`/columns/${id}`, { method: "PATCH", body: { title } })),
-    deleteColumn: (id: string) => run(() => api(`/columns/${id}`, { method: "DELETE" })),
+    restore,
+    renameBoard: (title: string) => submit({ opId: opId(), type: "board.update", payload: { boardId, title } }),
+    addColumn: (title: string) =>
+      submit({ opId: opId(), type: "column.create", payload: { boardId, id: crypto.randomUUID(), title } }),
+    renameColumn: (columnId: string, title: string) =>
+      submit({ opId: opId(), type: "column.update", payload: { columnId, title } }),
+    deleteColumn: (columnId: string) => submit({ opId: opId(), type: "column.delete", payload: { columnId } }),
     addCard: (columnId: string, title: string) =>
-      run(() => api(`/columns/${columnId}/cards`, { method: "POST", body: { id: crypto.randomUUID(), title } })),
-    updateCard: (card: Card, patch: Record<string, unknown>) =>
-      run(() =>
-        api<Card>(`/cards/${card.id}`, { method: "PATCH", body: { ...patch, baseVersion: card.version } }).catch(
-          tagDeleted(card.id),
-        ),
-      ),
-    /**
-     * Kéo thả. `optimisticPosition` do client tự tính để thẻ nằm ngay chỗ mới; server vẫn
-     * tự tính lại từ hàng xóm hiện tại (client chỉ gửi ý định), rồi ta tải lại bảng.
-     * Phải gọi đồng bộ cùng lúc với việc bỏ trạng thái kéo, để không nháy về chỗ cũ.
-     */
-    moveCard: (card: Card, intent: MoveIntent, optimisticPosition: string | null) => {
-      // Hủy lần tải đang chạy dở, kẻo nó trả về dữ liệu cũ đè lên cập nhật lạc quan.
-      void qc.cancelQueries({ queryKey: key });
-      if (optimisticPosition !== null) {
-        qc.setQueryData<BoardSnapshot>(key, (snap) =>
-          snap && {
-            ...snap,
-            cards: snap.cards.map((k) =>
-              k.id === card.id ? { ...k, columnId: intent.columnId, position: optimisticPosition } : k,
-            ),
-          },
-        );
-      }
-      return run(() =>
-        api<CardMoveResult>(`/cards/${card.id}/move`, { method: "POST", body: intent }).catch(tagDeleted(card.id)),
-      );
-    },
-    deleteCard: async (card: Card) => {
-      const ok = await run(() => api<Card>(`/cards/${card.id}`, { method: "DELETE" }));
-      if (ok) toast({ message: `Deleted “${card.title}”`, action: { label: "Undo", run: () => void restore(card.id) } });
+      submit({ opId: opId(), type: "card.create", payload: { columnId, id: crypto.randomUUID(), title } }),
+    /** `force` = bỏ baseVersion, tức ghi đè (nút "Use mine" sau khi xung đột). */
+    updateCard: (card: Card, patch: CardPatch, force = false) =>
+      submit({
+        opId: opId(),
+        type: "card.update",
+        payload: { ...patch, cardId: card.id, ...(force ? {} : { baseVersion: card.version }) },
+      }),
+    /** Vị trí lạc quan do optimisticUpdate tự tính từ ý định; server vẫn tính lại từ hàng xóm hiện tại. */
+    moveCard: (card: Card, intent: MoveIntent) =>
+      submit({ opId: opId(), type: "card.move", payload: { cardId: card.id, ...intent } }),
+    deleteCard: (card: Card) => {
+      submit({ opId: opId(), type: "card.delete", payload: { cardId: card.id } });
+      toast({ message: `Deleted “${card.title}”`, action: { label: "Undo", run: () => restore(card.id, card) } });
     },
   };
 }
@@ -138,18 +95,66 @@ function columnOf(order: Order, id: UniqueIdentifier): string | undefined {
 export function BoardPage() {
   const { boardId = "" } = useParams();
   const [openCardId, setOpenCardId] = useState<string | null>(null);
-  const board = useQuery({
-    queryKey: ["board", boardId],
-    queryFn: () => api<BoardSnapshot>(`/boards/${boardId}`),
+  const toast = useToast();
+  const openCardRef = useRef(openCardId);
+  openCardRef.current = openCardId;
+  // Các hàm xử lý sự kiện bên dưới cần actions và danh sách thành viên mới nhất.
+  const actionsRef = useRef<Actions | null>(null);
+  const membersRef = useRef<Member[]>([]);
+
+  const { sync, state } = useBoardSync(boardId, {
+    onRejected: (req, err) => {
+      const actions = actionsRef.current;
+      if (err.code === "card_deleted") {
+        const cardId = (err.details as { cardId?: string } | undefined)?.cardId;
+        toast({
+          message: `${err.message}. Your change wasn't saved.`,
+          tone: "error",
+          action: cardId && actions ? { label: "Restore", run: () => actions.restore(cardId) } : undefined,
+        });
+      } else if (err.code === "version_conflict" && req.type === "card.update") {
+        const { fields = [], card } = (err.details ?? {}) as { fields?: string[]; card?: Card };
+        const { cardId: _id, baseVersion: _v, ...patch } = req.payload;
+        const what = fields.map((f) => FIELD_LABEL[f] ?? f).join(" and ") || "card";
+        toast({
+          message: `Someone else just changed the ${what}${card ? ` of “${card.title}”` : ""}. Your change wasn't saved.`,
+          tone: "error",
+          action: card && actions ? { label: "Use mine", run: () => actions.updateCard(card, patch, true) } : undefined,
+        });
+      } else {
+        toast({ message: err.message, tone: "error" });
+      }
+    },
+    onRemoteOp: (op) => {
+      // Thẻ đang mở bị người khác xóa: hộp thoại tự đóng (thẻ biến mất), báo ai xóa và cho khôi phục.
+      if (op.type === "card.delete" && op.payload.card.id === openCardRef.current) {
+        const who = membersRef.current.find((m) => m.id === op.actorId)?.displayName ?? "Someone";
+        const card = op.payload.card;
+        toast({
+          message: `${who} deleted “${card.title}”.`,
+          tone: "error",
+          action: { label: "Restore", run: () => actionsRef.current?.restore(card.id, card) },
+        });
+      }
+    },
   });
-  const actions = useBoardActions(boardId);
+  const actions = useBoardActions(sync, boardId);
+  actionsRef.current = actions;
+  membersRef.current = state.board?.members ?? [];
+  const view = state.board;
 
   /** Trong lúc kéo: thứ tự tạm thời (thẻ đã "nhảy" sang cột đang rê qua). */
   const [drag, setDrag] = useState<{ activeId: string; order: Order } | null>(null);
 
-  const columns = board.data?.columns;
-  const cards = board.data?.cards;
+  const columns = view?.columns;
+  const cards = view?.cards;
   const cardById = useMemo(() => new Map((cards ?? []).map((k) => [k.id, k])), [cards]);
+
+  // Thẻ đang mở biến khỏi bảng (mình hoặc người khác xóa): quên luôn, để khi được khôi phục thì
+  // hộp thoại không tự bật lại. Hộp thoại bị gỡ trước khi sự kiện "close" kịp chạy nên phải làm ở đây.
+  useEffect(() => {
+    if (openCardId && cards && !cards.some((k) => k.id === openCardId)) setOpenCardId(null);
+  }, [openCardId, cards]);
   const savedOrder = useMemo<Order>(() => {
     const order: Order = {};
     for (const col of columns ?? []) order[col.id] = [];
@@ -168,19 +173,26 @@ export function BoardPage() {
     }),
   );
 
-  if (board.error) return <div className="page"><p className="form-error">{errorMessage(board.error)}</p></div>;
-  if (!board.data) return <div className="page muted">Loading board…</div>;
+  if (state.status === "gone") {
+    return (
+      <div className="page">
+        <p className="form-error">{state.error}</p>
+        <Link to="/">← Back to your workspaces</Link>
+      </div>
+    );
+  }
+  if (!view) return <div className="page muted">Connecting to the board…</div>;
 
-  const { members, role } = board.data;
+  const { members, role } = view;
   const canEdit = role !== "viewer";
   const memberById = new Map(members.map((m) => [m.id, m]));
-  const openCard = board.data.cards.find((c) => c.id === openCardId) ?? null;
+  const openCard = view.cards.find((c) => c.id === openCardId) ?? null;
   const order = drag?.order ?? savedOrder;
-  const columnTitle = (id: string | undefined) => board.data.columns.find((c) => c.id === id)?.title ?? "a column";
+  const columnTitle = (id: string | undefined) => view.columns.find((c) => c.id === id)?.title ?? "a column";
   const activeCard = drag ? cardById.get(drag.activeId) : undefined;
   /** Cột mà thẻ đang kéo sẽ rơi vào nếu thả ngay bây giờ. */
   const targetColumn = drag ? columnOf(order, drag.activeId) : undefined;
-  const activeTone = toneAt(Math.max(0, board.data.columns.findIndex((c) => c.id === targetColumn)));
+  const activeTone = toneAt(Math.max(0, view.columns.findIndex((c) => c.id === targetColumn)));
 
   function onDragStart({ active }: DragStartEvent) {
     setDrag({ activeId: String(active.id), order: savedOrder });
@@ -247,15 +259,8 @@ export function BoardPage() {
       return;
     }
 
-    let optimistic: string | null = null;
-    try {
-      const prev = intent.afterCardId ? cardById.get(intent.afterCardId)!.position : null;
-      const next = intent.beforeCardId ? cardById.get(intent.beforeCardId)!.position : null;
-      optimistic = positionBetween(prev, next);
-    } catch {
-      // Hai hàng xóm trùng vị trí (rất hiếm): bỏ qua cập nhật lạc quan, chờ server.
-    }
-    actions.moveCard(card, intent, optimistic);
+    // Ghi thao tác (kèm cập nhật lạc quan) CÙNG LÚC với bỏ trạng thái kéo, để thẻ không nháy về chỗ cũ.
+    actions.moveCard(card, intent);
     setDrag(null);
   }
 
@@ -274,11 +279,11 @@ export function BoardPage() {
     <div className="board-page">
       <div className="board-header">
         <nav className="crumbs">
-          <Link to={`/w/${board.data.board.workspaceId}`}>← Back to workspace</Link>
+          <Link to={`/w/${view.board.workspaceId}`}>← Back to workspace</Link>
         </nav>
         <InlineEdit
           className="board-title"
-          value={board.data.board.title}
+          value={view.board.title}
           disabled={!canEdit}
           maxLength={120}
           onSave={actions.renameBoard}
@@ -289,6 +294,7 @@ export function BoardPage() {
           ))}
         </div>
         {!canEdit && <span className="badge">View only</span>}
+        <SyncBadge status={state.status} pending={state.pending} />
       </div>
 
       <DndContext
@@ -307,7 +313,7 @@ export function BoardPage() {
         }}
       >
         <div className="lanes">
-          {board.data.columns.map((col, index) => (
+          {view.columns.map((col, index) => (
             <Lane
               key={col.id}
               column={col}
@@ -339,8 +345,8 @@ export function BoardPage() {
       {openCard && (
         <CardDialog
           card={openCard}
-          columns={board.data.columns}
-          tone={toneAt(Math.max(0, board.data.columns.findIndex((c) => c.id === openCard.columnId)))}
+          columns={view.columns}
+          tone={toneAt(Math.max(0, view.columns.findIndex((c) => c.id === openCard.columnId)))}
           members={members}
           canEdit={canEdit}
           actions={actions}
@@ -352,6 +358,24 @@ export function BoardPage() {
 }
 
 type Actions = ReturnType<typeof useBoardActions>;
+
+/** Trạng thái kết nối: người dùng biết thay đổi của mình đã tới server chưa. */
+function SyncBadge({ status, pending }: { status: SyncStatus; pending: number }) {
+  const [label, tone] =
+    status === "live"
+      ? pending > 0
+        ? ["Saving…", "saving"]
+        : ["Live", "live"]
+      : status === "reconnecting"
+        ? [pending > 0 ? `Offline · ${pending} unsent` : "Reconnecting…", "offline"]
+        : ["Connecting…", "offline"];
+  return (
+    <span className={`sync-badge sync-${tone}`} role="status" aria-live="polite">
+      <span className="sync-dot" aria-hidden />
+      {label}
+    </span>
+  );
+}
 
 function Lane(props: {
   column: Column;
@@ -369,11 +393,11 @@ function Lane(props: {
   // Cả cột là vùng thả, để thả được vào cột trống hoặc vào khoảng trống dưới thẻ cuối.
   const { setNodeRef } = useDroppable({ id: column.id, disabled: !canEdit });
 
-  async function submit() {
+  function submit() {
     const title = draft.trim();
     if (!title) return;
     setDraft("");
-    await actions.addCard(column.id, title);
+    actions.addCard(column.id, title);
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -459,12 +483,12 @@ function Lane(props: {
   );
 }
 
-function NewLane({ onAdd }: { onAdd: (title: string) => Promise<unknown> }) {
+function NewLane({ onAdd }: { onAdd: (title: string) => unknown }) {
   const [title, setTitle] = useState("");
-  async function submit(e: FormEvent) {
+  function submit(e: FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
-    await onAdd(title.trim());
+    onAdd(title.trim());
     setTitle("");
   }
   return (

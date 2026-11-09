@@ -45,17 +45,61 @@ describe("bảng → cột → thẻ", () => {
     await u.post(`/api/columns/${snap.columns[0]!.id}/cards`, { id, title: "Trùng" }).expect(409);
   });
 
-  it("sửa thẻ tăng version; gửi baseVersion cũ thì báo xung đột", async () => {
-    const u = await registerUser();
-    const snap = await createBoard(u);
-    const card = (await u.post(`/api/columns/${snap.columns[0]!.id}/cards`, { title: "A" }).expect(201)).body as Card;
+  describe("xung đột xét riêng từng trường", () => {
+    async function twoEditors() {
+      const a = await registerUser("An");
+      const b = await registerUser("Bình");
+      await addMember(a, b, "editor");
+      const snap = await createBoard(a);
+      const [todo, doing] = snap.columns.map((c) => c.id) as [string, string];
+      const card = (await a.post(`/api/columns/${todo}/cards`, { title: "A" }).expect(201)).body as Card;
+      return { a, b, todo, doing, card };
+    }
 
-    const v2 = await u.patch(`/api/cards/${card.id}`, { title: "B", baseVersion: 1 }).expect(200);
-    expect(v2.body.version).toBe(2);
+    it("người khác sửa CÙNG trường sau baseVersion → 409, kèm tên trường và thẻ mới nhất", async () => {
+      const { a, b, card } = await twoEditors();
+      const v2 = await a.patch(`/api/cards/${card.id}`, { title: "Của An", baseVersion: 1 }).expect(200);
+      expect(v2.body.version).toBe(2);
 
-    const conflict = await u.patch(`/api/cards/${card.id}`, { title: "C", baseVersion: 1 }).expect(409);
-    expect(conflict.body.error.code).toBe("version_conflict");
-    expect(conflict.body.error.details.card.title).toBe("B");
+      const conflict = await b.patch(`/api/cards/${card.id}`, { title: "Của Bình", baseVersion: 1 }).expect(409);
+      expect(conflict.body.error.code).toBe("version_conflict");
+      expect(conflict.body.error.details.fields).toEqual(["title"]);
+      expect(conflict.body.error.details.card.title).toBe("Của An");
+    });
+
+    it("hai người sửa hai trường KHÁC nhau từ cùng một phiên bản → cả hai được giữ", async () => {
+      const { a, b, card } = await twoEditors();
+      await a.patch(`/api/cards/${card.id}`, { title: "Tên mới", baseVersion: 1 }).expect(200);
+      const res = await b.patch(`/api/cards/${card.id}`, { dueDate: "2026-12-01", baseVersion: 1 }).expect(200);
+      expect(res.body).toMatchObject({ title: "Tên mới", dueDate: "2026-12-01", version: 3 });
+    });
+
+    it("thẻ bị kéo (đổi vị trí, đổi cột) không làm hỏng lần sửa tiêu đề đang dở", async () => {
+      const { a, b, doing, card } = await twoEditors();
+      await a.post(`/api/cards/${card.id}/move`, { columnId: doing }).expect(200);
+      await b.patch(`/api/cards/${card.id}`, { title: "Sửa sau khi bị kéo", baseVersion: 1 }).expect(200);
+    });
+
+    it("nhưng đổi cột qua hộp thoại thì xung đột với người vừa kéo sang cột khác", async () => {
+      const { a, b, todo, doing, card } = await twoEditors();
+      await a.post(`/api/cards/${card.id}/move`, { columnId: doing }).expect(200);
+      const res = await b.patch(`/api/cards/${card.id}`, { columnId: todo, baseVersion: 1 }).expect(409);
+      expect(res.body.error.details.fields).toEqual(["columnId"]);
+    });
+
+    it("chính mình sửa liên tiếp với cùng baseVersion (thao tác trước còn đang trên đường) → không xung đột", async () => {
+      const { a, card } = await twoEditors();
+      await a.patch(`/api/cards/${card.id}`, { title: "Lần 1", baseVersion: 1 }).expect(200);
+      const res = await a.patch(`/api/cards/${card.id}`, { title: "Lần 2", baseVersion: 1 }).expect(200);
+      expect(res.body.title).toBe("Lần 2");
+    });
+
+    it("không gửi baseVersion = ghi đè (nút 'Dùng bản của tôi')", async () => {
+      const { a, b, card } = await twoEditors();
+      await a.patch(`/api/cards/${card.id}`, { title: "Của An" }).expect(200);
+      const res = await b.patch(`/api/cards/${card.id}`, { title: "Của Bình" }).expect(200);
+      expect(res.body.title).toBe("Của Bình");
+    });
   });
 
   it("chuyển thẻ sang cột khác trong cùng bảng", async () => {

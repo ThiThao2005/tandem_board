@@ -10,10 +10,16 @@ export function signAccessToken(userId: string): string {
 
 /** Trả về userId, hoặc ném lỗi 401 (code token_expired nếu chỉ là hết hạn). */
 export function verifyAccessToken(token: string): string {
+  return verifyAccessTokenClaims(token).userId;
+}
+
+/** Như verifyAccessToken, kèm thời điểm hết hạn (giây) để socket tự ngắt khi token hết hạn. */
+export function verifyAccessTokenClaims(token: unknown): { userId: string; exp: number } {
+  if (typeof token !== "string" || !token) throw unauthorized();
   try {
     const payload = jwt.verify(token, config.jwtSecret, { algorithms: ["HS256"] });
-    if (typeof payload === "string" || !payload.sub) throw unauthorized();
-    return payload.sub;
+    if (typeof payload === "string" || !payload.sub || typeof payload.exp !== "number") throw unauthorized();
+    return { userId: payload.sub, exp: payload.exp };
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) throw unauthorized("token_expired", "Your session has expired");
     throw unauthorized();

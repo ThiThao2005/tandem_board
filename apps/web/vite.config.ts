@@ -11,6 +11,10 @@ export default defineConfig({
     port: Number(env.WEB_PORT ?? 5173),
     strictPort: true,
     // Gọi /api qua cùng origin với trang → cookie refresh token hoạt động mà không cần CORS.
-    proxy: { "/api": `http://localhost:${env.API_PORT ?? 4000}` },
+    proxy: {
+      "/api": `http://localhost:${env.API_PORT ?? 4000}`,
+      // Socket.IO (tuần 3): cùng origin với trang, ws: true để chuyển tiếp cả kết nối WebSocket.
+      "/socket.io": { target: `http://localhost:${env.API_PORT ?? 4000}`, ws: true },
+    },
   },
 });

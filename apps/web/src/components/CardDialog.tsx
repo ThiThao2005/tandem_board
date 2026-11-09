@@ -1,6 +1,6 @@
 import type { Card, Column, Member } from "@tandem/shared";
 import { useEffect, useRef, type CSSProperties } from "react";
-import type { useBoardActions } from "../pages/BoardPage";
+import type { CardPatch, useBoardActions } from "../pages/BoardPage";
 import { toneVars, type Tone } from "../palette";
 import { InlineEdit } from "./InlineEdit";
 
@@ -21,7 +21,7 @@ export function CardDialog(props: {
     if (dialog && !dialog.open) dialog.showModal();
   }, []);
 
-  const update = (patch: Record<string, unknown>) => actions.updateCard(card, patch);
+  const update = (patch: CardPatch) => actions.updateCard(card, patch);
 
   return (
     <dialog
