@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { comparePositioned, positionBetween } from "./position";
+import type { BoardPresence, PresenceUpdateInput } from "./presence";
 import {
   boardInput,
   cardCreateInput,
@@ -114,6 +115,8 @@ export interface ServerToClientEvents {
   /** Danh sách thành viên nhóm đổi (ai đó vào/rời nhóm). */
   "members.changed": (msg: { workspaceId: string }) => void;
   "board.deleted": (msg: { boardId: string }) => void;
+  /** Danh sách người đang ở trên bảng (cả danh sách, gửi mỗi khi nó đổi và ngay sau khi vào bảng). */
+  presence: (msg: BoardPresence) => void;
 }
 
 export interface ClientToServerEvents {
@@ -121,6 +124,8 @@ export interface ClientToServerEvents {
   "board.leave": (msg: { boardId: string }) => void;
   op: (msg: OpRequestInput & { boardId: string }, ack: (res: OpAck) => void) => void;
   "auth.refresh": (token: string, ack: (res: Ack) => void) => void;
+  /** Trạng thái của tab này trên bảng: vừa là thông báo thay đổi vừa là heartbeat. Ack không bắt buộc. */
+  "presence.update": (msg: PresenceUpdateInput, ack?: (res: Ack) => void) => void;
 }
 
 // ---------- Áp dụng thao tác ----------

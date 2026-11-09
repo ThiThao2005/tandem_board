@@ -16,13 +16,14 @@ import {
   type UniqueIdentifier,
 } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { comparePositioned, type Card, type Column, type Member, type OpRequest } from "@tandem/shared";
+import { comparePositioned, type Card, type Column, type Member, type OpRequest, type PresenceUser } from "@tandem/shared";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router";
+import { useMe } from "../auth";
 import { Avatar } from "../components/Avatar";
 import { CardDialog } from "../components/CardDialog";
 import { InlineEdit } from "../components/InlineEdit";
-import { CardFace, SortableCard } from "../components/SortableCard";
+import { CardFace, SortableCard, type Editor } from "../components/SortableCard";
 import { toneAt, toneVars, type Tone } from "../palette";
 import type { BoardSync, SyncStatus } from "../sync/boardSync";
 import { useBoardSync } from "../sync/useBoardSync";
@@ -92,8 +93,22 @@ function columnOf(order: Order, id: UniqueIdentifier): string | undefined {
   return Object.keys(order).find((col) => order[col]!.includes(key));
 }
 
+/** Người KHÁC đang mở từng thẻ để sửa: cardId → danh sách người. Người chưa có trong danh sách thành viên thì bỏ qua. */
+function editorsByCard(presence: PresenceUser[], memberById: Map<string, Member>, meId: string): Map<string, Editor[]> {
+  const result = new Map<string, Editor[]>();
+  for (const p of presence) {
+    const member = memberById.get(p.userId);
+    if (!p.cardId || p.userId === meId || !member) continue;
+    const list = result.get(p.cardId) ?? [];
+    list.push({ member, away: p.status === "away" });
+    result.set(p.cardId, list);
+  }
+  return result;
+}
+
 export function BoardPage() {
   const { boardId = "" } = useParams();
+  const me = useMe();
   const [openCardId, setOpenCardId] = useState<string | null>(null);
   const toast = useToast();
   const openCardRef = useRef(openCardId);
@@ -142,6 +157,12 @@ export function BoardPage() {
   actionsRef.current = actions;
   membersRef.current = state.board?.members ?? [];
   const view = state.board;
+  const canEdit = view ? view.role !== "viewer" : false;
+
+  // Mở thẻ (khi có quyền sửa) thì báo cho người khác để thẻ được tô viền bên họ.
+  useEffect(() => {
+    sync?.setPresence({ cardId: canEdit ? openCardId : null });
+  }, [sync, openCardId, canEdit]);
 
   /** Trong lúc kéo: thứ tự tạm thời (thẻ đã "nhảy" sang cột đang rê qua). */
   const [drag, setDrag] = useState<{ activeId: string; order: Order } | null>(null);
@@ -183,9 +204,9 @@ export function BoardPage() {
   }
   if (!view) return <div className="page muted">Connecting to the board…</div>;
 
-  const { members, role } = view;
-  const canEdit = role !== "viewer";
+  const { members } = view;
   const memberById = new Map(members.map((m) => [m.id, m]));
+  const editing = editorsByCard(state.presence, memberById, me.id);
   const openCard = view.cards.find((c) => c.id === openCardId) ?? null;
   const order = drag?.order ?? savedOrder;
   const columnTitle = (id: string | undefined) => view.columns.find((c) => c.id === id)?.title ?? "a column";
@@ -288,11 +309,7 @@ export function BoardPage() {
           maxLength={120}
           onSave={actions.renameBoard}
         />
-        <div className="avatars">
-          {members.map((m) => (
-            <Avatar key={m.id} name={m.displayName} color={m.avatarColor} />
-          ))}
-        </div>
+        <PresenceBar members={members} presence={state.presence} meId={me.id} connected={state.status === "live"} />
         {!canEdit && <span className="badge">View only</span>}
         <SyncBadge status={state.status} pending={state.pending} />
       </div>
@@ -323,6 +340,7 @@ export function BoardPage() {
               cards={(order[col.id] ?? savedOrder[col.id] ?? []).flatMap((id) => cardById.get(id) ?? [])}
               isDropTarget={targetColumn === col.id}
               memberById={memberById}
+              editing={editing}
               canEdit={canEdit}
               actions={actions}
               onOpen={setOpenCardId}
@@ -335,6 +353,7 @@ export function BoardPage() {
             <CardFace
               card={activeCard}
               assignee={activeCard.assigneeId ? memberById.get(activeCard.assigneeId) : undefined}
+              editors={editing.get(activeCard.id)}
               overlay
               style={toneVars(activeTone) as CSSProperties}
             />
@@ -348,6 +367,7 @@ export function BoardPage() {
           columns={view.columns}
           tone={toneAt(Math.max(0, view.columns.findIndex((c) => c.id === openCard.columnId)))}
           members={members}
+          others={editing.get(openCard.id) ?? []}
           canEdit={canEdit}
           actions={actions}
           onClose={() => setOpenCardId(null)}
@@ -358,6 +378,42 @@ export function BoardPage() {
 }
 
 type Actions = ReturnType<typeof useBoardActions>;
+
+/**
+ * Dãy avatar thành viên: ai đang mở bảng thì sáng và có chấm (xanh = đang xem, vàng = tab đang ẩn),
+ * ai không mở thì mờ. Người đang online đứng trước, theo thứ tự vào bảng.
+ */
+function PresenceBar(props: { members: Member[]; presence: PresenceUser[]; meId: string; connected: boolean }) {
+  const { members, presence, meId, connected } = props;
+  const byUser = new Map(presence.map((p, i) => [p.userId, { ...p, index: i }]));
+  const statusOf = (id: string) => {
+    const p = byUser.get(id);
+    if (p) return p.status;
+    // Chính mình: đang xem trang này thì chắc chắn online, kể cả khi danh sách chưa tới.
+    return id === meId ? "active" : "offline";
+  };
+  const rank = (id: string) => byUser.get(id)?.index ?? (id === meId ? -1 : Infinity);
+  const sorted = [...members].sort((a, b) => rank(a.id) - rank(b.id));
+  const online = members.filter((m) => statusOf(m.id) !== "offline").length;
+  return (
+    <div
+      className="avatars"
+      role="group"
+      aria-label={connected ? `${online} of ${members.length} members online` : "Members"}
+    >
+      {sorted.map((m) => (
+        <Avatar
+          key={m.id}
+          name={m.displayName}
+          isMe={m.id === meId}
+          color={m.avatarColor}
+          // Mất kết nối thì không biết ai đang online: không hiện chấm thay vì hiện thông tin cũ.
+          presence={connected ? statusOf(m.id) : undefined}
+        />
+      ))}
+    </div>
+  );
+}
 
 /** Trạng thái kết nối: người dùng biết thay đổi của mình đã tới server chưa. */
 function SyncBadge({ status, pending }: { status: SyncStatus; pending: number }) {
@@ -383,11 +439,12 @@ function Lane(props: {
   cards: Card[];
   isDropTarget: boolean;
   memberById: Map<string, Member>;
+  editing: Map<string, Editor[]>;
   canEdit: boolean;
   actions: Actions;
   onOpen: (id: string) => void;
 }) {
-  const { column, tone, cards, isDropTarget, memberById, canEdit, actions, onOpen } = props;
+  const { column, tone, cards, isDropTarget, memberById, editing, canEdit, actions, onOpen } = props;
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
   // Cả cột là vùng thả, để thả được vào cột trống hoặc vào khoảng trống dưới thẻ cuối.
@@ -446,6 +503,7 @@ function Lane(props: {
               key={card.id}
               card={card}
               assignee={card.assigneeId ? memberById.get(card.assigneeId) : undefined}
+              editors={editing.get(card.id)}
               canEdit={canEdit}
               onOpen={onOpen}
             />

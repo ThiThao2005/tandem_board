@@ -2,18 +2,22 @@ import type { Card, Column, Member } from "@tandem/shared";
 import { useEffect, useRef, type CSSProperties } from "react";
 import type { CardPatch, useBoardActions } from "../pages/BoardPage";
 import { toneVars, type Tone } from "../palette";
+import { Avatar } from "./Avatar";
 import { InlineEdit } from "./InlineEdit";
+import { joinNames, type Editor } from "./SortableCard";
 
 export function CardDialog(props: {
   card: Card;
   columns: Column[];
   tone: Tone;
   members: Member[];
+  /** Người khác cũng đang mở thẻ này (tuần 4). */
+  others: Editor[];
   canEdit: boolean;
   actions: ReturnType<typeof useBoardActions>;
   onClose: () => void;
 }) {
-  const { card, columns, tone, members, canEdit, actions, onClose } = props;
+  const { card, columns, tone, members, others, canEdit, actions, onClose } = props;
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -44,6 +48,23 @@ export function CardDialog(props: {
           <button className="icon-btn" aria-label="Close" onClick={() => ref.current?.close()}>
             ×
           </button>
+        </div>
+
+        {/* Luôn có phần tử (kể cả khi trống) để trình đọc màn hình đọc khi có người mở/đóng thẻ. */}
+        <div className={`dialog-presence ${others.length > 0 ? "has-others" : ""}`} role="status" aria-live="polite">
+          {others.length > 0 && (
+            <>
+              <span className="avatars-inline" aria-hidden>
+                {others.map((e) => (
+                  <Avatar key={e.member.id} name={e.member.displayName} color={e.member.avatarColor} size={22} />
+                ))}
+              </span>
+              <span>
+                {joinNames(others)} {others.length === 1 ? "is" : "are"} also editing this card
+                {others.every((e) => e.away) ? " (away)" : ""}.
+              </span>
+            </>
+          )}
         </div>
 
         <div className="dialog-fields">

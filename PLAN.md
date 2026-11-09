@@ -118,7 +118,7 @@ Người khác:  seq == lastSeq + 1 thì áp dụng ngay
 - [ ] Offline 2 ngày, lỡ hàng nghìn thao tác (gửi ảnh chụp)
 - [x] Bị mất quyền khi vẫn đang kết nối
 - [x] Token hết hạn khi socket còn mở
-- [ ] Tab ẩn lâu, heartbeat trễ, bị coi là offline nhầm
+- [x] Tab ẩn lâu, heartbeat trễ, bị coi là offline nhầm
 - [x] Gửi thao tác vào bảng của nhóm khác (IDOR: boardId hợp lệ + cardId của nhóm khác)
 - [x] Hai thao tác commit lệch thứ tự seq (lý do phải đánh seq theo từng bảng)
 - [ ] Cùng một người mở 2 tab, cả hai cùng gửi hàng đợi

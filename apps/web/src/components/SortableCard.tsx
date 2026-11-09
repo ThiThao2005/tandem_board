@@ -5,14 +5,42 @@ import type { CSSProperties, HTMLAttributes } from "react";
 import { formatDue } from "../format";
 import { Avatar } from "./Avatar";
 
+/** Một người khác đang mở thẻ để sửa (tuần 4). */
+export interface Editor {
+  member: Member;
+  /** Tab của người đó đang bị ẩn. */
+  away: boolean;
+}
+
+/** "Bình", "Bình and An", "Bình, An and Chi" */
+export function joinNames(editors: Editor[]): string {
+  const names = editors.map((e) => e.member.displayName);
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 /** Mặt thẻ: dùng cho thẻ trong cột và cho bản sao đi theo con trỏ khi kéo. */
 export function CardFace(
-  props: { card: Card; assignee?: Member; overlay?: boolean } & HTMLAttributes<HTMLDivElement>,
+  props: { card: Card; assignee?: Member; editors?: Editor[]; overlay?: boolean } & HTMLAttributes<HTMLDivElement>,
 ) {
-  const { card, assignee, overlay, className, ...rest } = props;
+  const { card, assignee, editors = [], overlay, className, style, ...rest } = props;
   const due = card.dueDate ? formatDue(card.dueDate) : null;
+  const editing = editors.length > 0;
+  // Viền theo màu của người đang sửa; tất cả đều đang ẩn tab thì viền đứt nét.
+  const editingStyle = editing ? ({ "--editor-color": editors[0]!.member.avatarColor } as CSSProperties) : undefined;
+  const allAway = editing && editors.every((e) => e.away);
   return (
-    <div className={`card ${overlay ? "is-overlay" : ""} ${className ?? ""}`} {...rest}>
+    <div
+      className={`card ${overlay ? "is-overlay" : ""} ${editing ? "is-being-edited" : ""} ${allAway ? "is-editor-away" : ""} ${className ?? ""}`}
+      style={{ ...editingStyle, ...style }}
+      {...rest}
+    >
+      {editing && (
+        <span className="card-editors" aria-hidden>
+          {editors.map((e) => (
+            <Avatar key={e.member.id} name={e.member.displayName} color={e.member.avatarColor} size={22} />
+          ))}
+        </span>
+      )}
       <span className="card-title">{card.title}</span>
       {(due || assignee) && (
         <span className="card-meta">
@@ -29,8 +57,14 @@ export function CardFace(
  * Bàn phím: Tab tới thẻ, Space để nhấc, mũi tên để dời, Space/Enter để thả, Esc để hủy.
  * Enter khi không kéo thì mở thẻ.
  */
-export function SortableCard(props: { card: Card; assignee?: Member; canEdit: boolean; onOpen: (id: string) => void }) {
-  const { card, assignee, canEdit, onOpen } = props;
+export function SortableCard(props: {
+  card: Card;
+  assignee?: Member;
+  editors?: Editor[];
+  canEdit: boolean;
+  onOpen: (id: string) => void;
+}) {
+  const { card, assignee, editors = [], canEdit, onOpen } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
     disabled: !canEdit,
@@ -42,11 +76,12 @@ export function SortableCard(props: { card: Card; assignee?: Member; canEdit: bo
       <CardFace
         card={card}
         assignee={assignee}
+        editors={editors}
         {...attributes}
         {...listeners}
         role="button"
         tabIndex={0}
-        aria-label={card.title}
+        aria-label={editors.length > 0 ? `${card.title} (${joinNames(editors)} editing)` : card.title}
         onClick={() => onOpen(card.id)}
         onKeyDown={(e) => {
           listeners?.onKeyDown?.(e);
