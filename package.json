@@ -11,7 +11,7 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "migrate": "npm run migrate -w @tandem/server",
-    "test": "npm test -w @tandem/server",
+    "test": "npm test -w @tandem/shared && npm test -w @tandem/server",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {

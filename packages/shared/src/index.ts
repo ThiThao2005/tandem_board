@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export * from "./position";
+
 // ---------- Vai trò ----------
 
 export const ROLES = ["owner", "editor", "viewer"] as const;
@@ -84,6 +86,20 @@ export const cardUpdateInput = z
   );
 export type CardUpdateInput = z.infer<typeof cardUpdateInput>;
 
+/**
+ * Kéo thẻ: client gửi Ý ĐỊNH (nằm sau thẻ nào / trước thẻ nào), không gửi vị trí.
+ * Server tự tính vị trí từ hàng xóm hiện tại, nên nếu hàng xóm đã bị người khác
+ * dời đi hay xóa thì vẫn đặt được thẻ vào chỗ hợp lý thay vì báo lỗi.
+ */
+export const cardMoveInput = z.object({
+  columnId: uuid,
+  /** Thẻ nằm ngay phía trên chỗ thả; null = thả lên đầu cột. */
+  afterCardId: uuid.nullable().default(null),
+  /** Thẻ nằm ngay phía dưới chỗ thả; null = thả xuống cuối cột. */
+  beforeCardId: uuid.nullable().default(null),
+});
+export type CardMoveInput = z.input<typeof cardMoveInput>;
+
 // ---------- Dữ liệu trả về ----------
 
 export interface User {
@@ -160,6 +176,12 @@ export interface Card {
   deletedAt: string | null;
   updatedAt: string;
   updatedBy: string | null;
+}
+
+export interface CardMoveResult {
+  card: Card;
+  /** Cột bị sắp xếp lại vì vị trí quá dài: vị trí mới của mọi thẻ trong cột. Rỗng nếu không. */
+  rebalanced: { id: string; position: string }[];
 }
 
 /** Ảnh chụp toàn bộ bảng. */

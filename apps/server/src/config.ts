@@ -21,7 +21,8 @@ export const config = {
   /** Supabase gói Free giới hạn số kết nối, nên để pool nhỏ. */
   databasePoolMax: Number(process.env.DATABASE_POOL_MAX ?? 10),
   jwtSecret: required("JWT_SECRET"),
-  port: Number(process.env.PORT ?? 4000),
+  /** API_PORT ưu tiên hơn PORT: một số công cụ tự đặt PORT cho cả tiến trình (cổng của web). */
+  port: Number(process.env.API_PORT ?? process.env.PORT ?? 4000),
   accessTokenTtl: "15m",
   refreshTokenDays: 30,
   /** Hai tab cùng làm mới token trong khoảng này thì không bị coi là đánh cắp token. */

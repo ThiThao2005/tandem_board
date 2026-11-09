@@ -111,8 +111,8 @@ Người khác:  seq == lastSeq + 1 thì áp dụng ngay
 ## 6. Các trường hợp dễ lỗi (mỗi dòng là một test case)
 
 - [ ] Hai người kéo cùng một thẻ sang hai cột khác nhau cùng lúc
-- [ ] Hai người chèn thẻ vào cùng một khe, sinh vị trí trùng (jitter)
-- [ ] Kéo thẻ nhiều lần vào cùng một khe làm chuỗi vị trí dài ra (sắp xếp lại cột)
+- [x] Hai người chèn thẻ vào cùng một khe, sinh vị trí trùng (jitter)
+- [x] Kéo thẻ nhiều lần vào cùng một khe làm chuỗi vị trí dài ra (sắp xếp lại cột)
 - [ ] Gửi lại một thao tác đã tới server (opId trùng)
 - [ ] Tin nhắn đến sai thứ tự hoặc thiếu seq
 - [ ] Offline 2 ngày, lỡ hàng nghìn thao tác (gửi ảnh chụp)
