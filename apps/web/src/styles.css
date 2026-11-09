@@ -875,3 +875,307 @@ a.tile:hover {
     animation: none;
   }
 }
+
+/* ---------- Ai đang online (tuần 4) ---------- */
+.avatar.has-presence {
+  position: relative;
+  transition: opacity 0.2s, filter 0.2s;
+}
+/* Có chấm trạng thái thì không xếp chồng avatar, kẻo avatar sau che mất chấm của avatar trước. */
+.avatars .avatar.has-presence + .avatar.has-presence {
+  margin-left: 4px;
+}
+.avatar-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--linen);
+  background: var(--moss);
+}
+.presence-away .avatar-dot {
+  background: var(--wheat);
+}
+.avatar.presence-offline {
+  opacity: 0.4;
+  filter: grayscale(0.7);
+}
+
+/* ---------- Thẻ đang có người khác mở để sửa ----------
+   Viền đậm theo màu avatar của người đó + quầng sáng "thở" + nhãn "editing" treo trên mép thẻ, để nhìn
+   lướt cả bảng là thấy ngay. Danh sách thẻ được chừa đệm (xem .lane-cards bên dưới) để quầng sáng và
+   nhãn không bị cột (overflow: auto) cắt mất. */
+.lane-cards {
+  padding: 12px 6px 6px;
+  margin: -10px -4px 0;
+  gap: 10px;
+}
+.card.is-being-edited {
+  position: relative;
+  border: 2px solid var(--editor-color);
+  border-left: 4px solid var(--tone-accent, var(--moss));
+  background: color-mix(in srgb, var(--editor-color) 7%, var(--surface));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--editor-color) 22%, transparent),
+    0 6px 18px color-mix(in srgb, var(--editor-color) 28%, transparent);
+  animation: editing-glow 2.4s ease-in-out infinite;
+}
+.card.is-being-edited:hover {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--editor-color) 30%, transparent),
+    0 8px 22px color-mix(in srgb, var(--editor-color) 32%, transparent);
+}
+@keyframes editing-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--editor-color) 22%, transparent),
+      0 6px 18px color-mix(in srgb, var(--editor-color) 26%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px color-mix(in srgb, var(--editor-color) 10%, transparent),
+      0 6px 22px color-mix(in srgb, var(--editor-color) 38%, transparent);
+  }
+}
+
+/* Mọi người đang mở thẻ đều đã ẩn tab: viền đứt nét, không nhấp nháy. */
+.card.is-being-edited.is-editor-away {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--editor-color) 60%, transparent);
+  border-left: 4px solid var(--tone-accent, var(--moss));
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  animation: none;
+}
+
+/* Nhãn treo trên mép thẻ: avatar người đang sửa + chữ "editing". */
+.card-editors {
+  position: absolute;
+  top: -11px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 1px 2px;
+  border-radius: 999px;
+  background: var(--editor-color);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--editor-color) 45%, transparent);
+}
+.card-editors::after {
+  content: "editing";
+}
+.card-editors .avatar {
+  border: 1.5px solid #fff;
+  box-shadow: none;
+}
+.card-editors .avatar + .avatar {
+  margin-left: -8px;
+}
+/* Chấm nhấp nháy cạnh chữ: "đang có người ở đây". */
+.card-editors::before {
+  content: "";
+  order: 2;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff;
+  animation: editing-dot 1.2s ease-in-out infinite;
+}
+.card-editors::after {
+  order: 3;
+}
+@keyframes editing-dot {
+  50% {
+    opacity: 0.25;
+    transform: scale(0.7);
+  }
+}
+.card.is-editor-away .card-editors {
+  background: color-mix(in srgb, var(--editor-color) 55%, var(--surface));
+  box-shadow: none;
+}
+.card.is-editor-away .card-editors::after {
+  content: "away";
+}
+.card.is-editor-away .card-editors::before {
+  animation: none;
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card.is-being-edited,
+  .card-editors::before {
+    animation: none;
+  }
+}
+
+.dialog-presence.has-others {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--linen);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+/* Chỗ trống vẫn giữ (để trình đọc màn hình đọc khi có người vào) nhưng không chiếm khoảng cách. */
+.dialog-presence:not(.has-others) {
+  margin-top: -18px;
+}
+.avatars-inline {
+  display: flex;
+}
+.avatars-inline .avatar + .avatar {
+  margin-left: -8px;
+}
+
+/* =====================================================================================================
+   Làm rõ hơn (theo góp ý: thẻ và ô còn nhạt, khó phân biệt). Đặt cuối file để đè lên kiểu cũ.
+   - Mọi thẻ: viền 2 px theo màu cột, vạch trái 6 px, "mép dưới" đậm như tấm thẻ giấy, chữ đậm hơn.
+   - Cột: viền 2 px theo màu cột, đường kẻ dưới tiêu đề.
+   - Ô nhóm/bảng: viền 2 px, dải màu trên đầu, bóng rõ hơn.
+   - Thẻ đang có người sửa: viền 3 px + vòng màu đặc 4 px + quầng sáng "thở", nhãn to hơn.
+   ===================================================================================================== */
+
+/* ---------- Mọi thẻ ---------- */
+.card {
+  border: 2px solid color-mix(in srgb, var(--tone-accent, var(--moss)) 38%, var(--line));
+  border-left: 6px solid var(--tone-accent, var(--moss));
+  border-radius: 12px;
+  box-shadow:
+    0 3px 0 color-mix(in srgb, var(--tone-accent, var(--moss)) 28%, transparent),
+    0 4px 12px rgb(60 50 30 / 0.08);
+}
+.card:hover {
+  border-color: var(--tone-accent, var(--moss));
+  transform: translateY(-2px);
+  box-shadow:
+    0 5px 0 color-mix(in srgb, var(--tone-accent, var(--moss)) 40%, transparent),
+    0 10px 22px rgb(60 50 30 / 0.14);
+}
+.card-title {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* ---------- Cột ---------- */
+.lane {
+  border: 2px solid color-mix(in srgb, var(--tone-accent, #999) 40%, transparent);
+  box-shadow: 0 2px 10px rgb(60 50 30 / 0.06);
+}
+.lane-header {
+  border-bottom: 2px solid color-mix(in srgb, var(--tone-accent, #999) 30%, transparent);
+  margin-bottom: 10px;
+}
+.lane-title {
+  font-weight: 700;
+}
+.lane-dot {
+  width: 12px;
+  height: 12px;
+}
+.lane.is-over {
+  border-color: var(--tone-accent, #999);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-accent, #999) 25%, transparent);
+}
+/* Chừa đệm rộng hơn cho vòng màu + quầng sáng của thẻ đang sửa (cột có overflow: auto sẽ cắt phần thừa). */
+.lane-cards {
+  padding: 14px 9px 10px;
+  margin: -12px -7px 0;
+  gap: 12px;
+}
+
+/* ---------- Ô nhóm / bảng ---------- */
+.tile {
+  border: 2px solid var(--line);
+  box-shadow: 0 3px 0 rgb(60 50 30 / 0.06), 0 6px 16px rgb(60 50 30 / 0.08);
+}
+.tile-toned {
+  border-color: color-mix(in srgb, var(--tone-accent) 45%, var(--line));
+}
+/* Dải màu trên đầu ô. */
+.tile-toned::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 6px;
+  background: var(--tone-accent);
+}
+.tile-toned:hover {
+  border-color: var(--tone-accent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--tone-accent) 22%, transparent),
+    0 12px 26px rgb(60 50 30 / 0.14);
+}
+.tile-title {
+  font-weight: 700;
+  font-size: 17px;
+}
+.tile-new {
+  border: 2px dashed color-mix(in srgb, var(--moss) 35%, var(--line));
+}
+
+/* ---------- Thẻ đang có người khác mở để sửa (đậm hơn nữa) ---------- */
+.card.is-being-edited {
+  border: 3px solid var(--editor-color);
+  border-left: 6px solid var(--tone-accent, var(--moss));
+  background: color-mix(in srgb, var(--editor-color) 11%, var(--surface));
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--editor-color) 35%, transparent),
+    0 8px 22px color-mix(in srgb, var(--editor-color) 35%, transparent);
+  animation: editing-glow-strong 2s ease-in-out infinite;
+}
+.card.is-being-edited:hover {
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--editor-color) 45%, transparent),
+    0 10px 26px color-mix(in srgb, var(--editor-color) 40%, transparent);
+}
+@keyframes editing-glow-strong {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--editor-color) 35%, transparent),
+      0 8px 22px color-mix(in srgb, var(--editor-color) 32%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 8px color-mix(in srgb, var(--editor-color) 16%, transparent),
+      0 8px 28px color-mix(in srgb, var(--editor-color) 48%, transparent);
+  }
+}
+.card.is-being-edited.is-editor-away {
+  border: 3px dashed color-mix(in srgb, var(--editor-color) 70%, transparent);
+  border-left: 6px solid var(--tone-accent, var(--moss));
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--editor-color) 14%, transparent);
+  animation: none;
+}
+.card-editors {
+  top: -13px;
+  padding: 2px 10px 2px 2px;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 5px;
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 3px 8px color-mix(in srgb, var(--editor-color) 50%, transparent);
+}
+.card-editors::before {
+  width: 7px;
+  height: 7px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card.is-being-edited {
+    animation: none;
+  }
+}

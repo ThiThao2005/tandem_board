@@ -3,7 +3,7 @@ import { useMe } from "../auth";
 import { getSocket } from "../realtime";
 import { BoardSync, type SyncEvents, type SyncSnapshot } from "./boardSync";
 
-const EMPTY: SyncSnapshot = { status: "connecting", board: null, pending: 0, error: null };
+const EMPTY: SyncSnapshot = { status: "connecting", board: null, pending: 0, error: null, presence: [] };
 const noopSubscribe = () => () => {};
 
 /**
@@ -28,6 +28,15 @@ export function useBoardSync(boardId: string, events: SyncEvents): { sync: Board
       setSync(null);
     };
   }, [boardId, me.id, eventsRef]);
+
+  // Tab bị ẩn → "away" chứ không phải offline (trình duyệt làm chậm heartbeat của tab ẩn, server chờ lâu hơn).
+  useEffect(() => {
+    if (!sync) return;
+    const update = () => sync.setPresence({ status: document.visibilityState === "hidden" ? "away" : "active" });
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, [sync]);
 
   const state = useSyncExternalStore(sync?.subscribe ?? noopSubscribe, sync?.getSnapshot ?? (() => EMPTY));
   return { sync, state };

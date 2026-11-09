@@ -58,12 +58,24 @@ mọi người trong phòng board:{id} ◀──{ seq, opId, type, kết quả }
 
 Client hiện thay đổi ngay (lạc quan); nhận seq liên tục thì áp dụng, thấy seq nhảy cóc thì lấy bù; server từ chối thì bảng tự về đúng trạng thái. Chi tiết trong [NOTES.md](NOTES.md) (tuần 3).
 
+## Ai đang online
+
+```
+mỗi tab ──presence.update { status: active|away, cardId }──▶ server (chỉ trong bộ nhớ, không lưu DB)
+          (khi đổi + heartbeat 15 s)                          gộp theo người, danh sách đổi thì phát
+mọi người trong phòng board:{id} ◀──presence { users: [{ userId, status, cardId }] }──
+```
+
+- Dãy avatar trên đầu bảng: chấm xanh = đang xem, chấm vàng = tab đang ẩn, mờ = không mở bảng.
+- Thẻ có người khác đang mở để sửa thì có viền theo màu avatar của người đó; trong hộp thoại thẻ hiện "Bình is also editing this card".
+- Rời bảng / mất kết nối / bị xóa khỏi nhóm thì biến mất ngay. Tab đang hiện im quá 30 s thì bị dọn; tab ẩn được chờ 150 s vì trình duyệt làm chậm hẹn giờ của tab ẩn.
+
 ## Tiến độ
 
 - [x] Tuần 1: đăng nhập, nhóm + mời thành viên, bảng → cột → thẻ
 - [x] Tuần 2: kéo thả, vị trí kiểu phân số (có jitter), tự sắp xếp lại cột
 - [x] Tuần 3: đồng bộ realtime qua WebSocket (seq theo từng bảng, chống ghi trùng, cập nhật lạc quan)
-- [ ] Tuần 4: thấy ai đang online
+- [x] Tuần 4: thấy ai đang online, viền màu quanh thẻ đang có người sửa
 - [ ] Tuần 5: ghi chú nhiều người cùng gõ (Yjs)
 - [ ] Tuần 6: chế độ offline
 - [ ] Tuần 7: kiểm thử hội tụ, kiểm thử tải, CI

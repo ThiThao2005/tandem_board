@@ -5,12 +5,14 @@ import {
   type BoardSnapshot,
   type OpRequest,
   type OptimisticContext,
+  type PresenceUser,
   type Role,
   type SocketErrorBody,
   type WorkspaceDetail,
 } from "@tandem/shared";
 import { api } from "../api";
 import type { TandemSocket } from "../realtime";
+import { PresenceTracker, type PresenceState } from "./presence";
 
 export type SyncStatus = "connecting" | "live" | "reconnecting" | "gone";
 
@@ -22,6 +24,8 @@ export interface SyncSnapshot {
   pending: number;
   /** Lý do khi status = "gone" (không có quyền, bảng bị xóa…). */
   error: string | null;
+  /** Ai đang ở trên bảng (gồm cả mình). Rỗng khi chưa vào được phòng hoặc đang mất kết nối. */
+  presence: PresenceUser[];
 }
 
 export interface SyncEvents {
@@ -49,7 +53,7 @@ export class BoardSync {
   private early: BoardOp[] = [];
   private status: SyncStatus = "connecting";
   private error: string | null = null;
-  private snapshot: SyncSnapshot = { status: "connecting", board: null, pending: 0, error: null };
+  private snapshot: SyncSnapshot = { status: "connecting", board: null, pending: 0, error: null, presence: [] };
   private listeners = new Set<() => void>();
   private stopped = false;
   private sending = false;
@@ -64,13 +68,16 @@ export class BoardSync {
   private gapTimer: ReturnType<typeof setTimeout> | undefined;
   private joining = false;
   private offs: (() => void)[] = [];
+  private readonly presence: PresenceTracker;
 
   constructor(
     readonly boardId: string,
     private readonly socket: TandemSocket,
     private readonly userId: string,
     private readonly events: SyncEvents,
-  ) {}
+  ) {
+    this.presence = new PresenceTracker(boardId, socket, () => this.notify());
+  }
 
   // ---------- Cho React (useSyncExternalStore) ----------
 
@@ -84,9 +91,18 @@ export class BoardSync {
   private notify() {
     const board = this.replica?.view ?? null;
     const pending = this.replica?.pendingOps.length ?? 0;
+    const presence = this.presence.list;
     const s = this.snapshot;
-    if (s.board === board && s.status === this.status && s.pending === pending && s.error === this.error) return;
-    this.snapshot = { status: this.status, board, pending, error: this.error };
+    if (
+      s.board === board &&
+      s.status === this.status &&
+      s.pending === pending &&
+      s.error === this.error &&
+      s.presence === presence
+    ) {
+      return;
+    }
+    this.snapshot = { status: this.status, board, pending, error: this.error, presence };
     for (const fn of this.listeners) fn();
   }
 
@@ -97,6 +113,7 @@ export class BoardSync {
     const onOp = (op: BoardOp) => this.onOp(op);
     const onConnect = () => void this.join();
     const onDisconnect = () => {
+      this.presence.left();
       if (this.status === "live") this.setStatus("reconnecting");
       // Lần gửi đang chờ ack trên kết nối cũ coi như bỏ; kết nối lại sẽ gửi lại cùng opId.
       this.sendGeneration++;
@@ -132,6 +149,7 @@ export class BoardSync {
       () => s.off("access.role", onRole),
       () => s.off("members.changed", onMembers),
     ];
+    this.presence.start();
 
     if (s.connected) void this.join();
   }
@@ -139,6 +157,7 @@ export class BoardSync {
   stop() {
     this.stopped = true;
     clearTimeout(this.gapTimer);
+    this.presence.stop();
     for (const off of this.offs) off();
     this.offs = [];
     if (this.socket.connected) this.socket.emit("board.leave", { boardId: this.boardId });
@@ -150,6 +169,7 @@ export class BoardSync {
   }
 
   private gone(message: string) {
+    this.presence.left();
     this.error = message;
     this.setStatus("gone");
   }
@@ -192,6 +212,7 @@ export class BoardSync {
       }
       this.replica.patch({ role: res.role });
       this.status = "live";
+      this.presence.joined();
       this.notify();
       void this.flush();
     } finally {
@@ -225,6 +246,13 @@ export class BoardSync {
       this.replica.patch({ members: detail.members });
       this.notify();
     }
+  }
+
+  // ---------- Presence ----------
+
+  /** Tab hiện/ẩn, mở/đóng hộp thoại thẻ: báo cho người khác (chỉ gửi khi thật sự đổi). */
+  setPresence(patch: Partial<PresenceState>) {
+    this.presence.set(patch);
   }
 
   // ---------- Gửi thao tác ----------
