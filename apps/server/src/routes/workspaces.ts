@@ -14,6 +14,7 @@ import { uid } from "../auth/middleware";
 import { randomToken, sha256 } from "../auth/tokens";
 import { pool, withTx, type Db } from "../db";
 import { forbidden, HttpError, notFound, parse, parseId } from "../errors";
+import { boardDeleted, membersChanged, revokeAccess, roleChanged } from "../realtime";
 
 export const workspacesRouter = Router();
 
@@ -74,7 +75,14 @@ workspacesRouter.patch("/workspaces/:id", async (req, res) => {
 workspacesRouter.delete("/workspaces/:id", async (req, res) => {
   const id = parseId(req.params.id);
   await requireWorkspace(pool, uid(req), id, "owner");
-  await pool.query("DELETE FROM workspaces WHERE id = $1", [id]);
+  // Lấy danh sách bảng ngay trong câu DELETE (xóa dây chuyền) để báo cho người đang mở các bảng đó.
+  const { rows } = await pool.query<{ id: string }>(
+    `WITH gone AS (DELETE FROM workspaces WHERE id = $1 RETURNING id)
+     SELECT b.id FROM boards b JOIN gone ON gone.id = b.workspace_id`,
+    [id],
+  );
+  // Sau khi xóa: ai đang mở một bảng của nhóm này được báo "bảng đã bị xóa" và bị đưa ra khỏi phòng.
+  for (const board of rows) boardDeleted(board.id);
   res.status(204).end();
 });
 
@@ -105,6 +113,9 @@ workspacesRouter.patch("/workspaces/:id/members/:userId", async (req, res) => {
     if (current.rows[0].role === "owner" && role !== "owner" && (await ownerCount(c, id)) <= 1) throw lastOwner();
     await c.query("UPDATE workspace_members SET role = $3 WHERE workspace_id = $1 AND user_id = $2", [id, targetId, role]);
   });
+  // Quyền vẫn được kiểm tra lại từ DB ở mỗi thao tác; hai sự kiện này chỉ để giao diện cập nhật ngay.
+  roleChanged(id, targetId, role);
+  await membersChanged(id);
   res.json({ userId: targetId, role });
 });
 
@@ -122,8 +133,10 @@ workspacesRouter.delete("/workspaces/:id/members/:userId", async (req, res) => {
     if (!current.rows[0]) throw notFound("This person is not a member of the workspace");
     if (current.rows[0].role === "owner" && (await ownerCount(c, id)) <= 1) throw lastOwner();
     await c.query("DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2", [id, targetId]);
-    // Tuần 3: đá các kết nối realtime của người này ra khỏi phòng của nhóm.
   });
+  // Sau khi commit: đá các kết nối realtime của người này ra khỏi phòng các bảng của nhóm.
+  await revokeAccess(id, targetId);
+  await membersChanged(id);
   res.status(204).end();
 });
 
@@ -221,5 +234,6 @@ workspacesRouter.post("/invitations/token/:token/accept", async (req, res) => {
      ON CONFLICT (workspace_id, user_id) DO NOTHING`,
     [inv.workspaceId, me, inv.role],
   );
+  await membersChanged(inv.workspaceId);
   res.json({ workspaceId: inv.workspaceId });
 });

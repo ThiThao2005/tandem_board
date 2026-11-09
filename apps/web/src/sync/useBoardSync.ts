@@ -1,0 +1,34 @@
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { useMe } from "../auth";
+import { getSocket } from "../realtime";
+import { BoardSync, type SyncEvents, type SyncSnapshot } from "./boardSync";
+
+const EMPTY: SyncSnapshot = { status: "connecting", board: null, pending: 0, error: null };
+const noopSubscribe = () => () => {};
+
+/**
+ * Mở đồng bộ cho một bảng khi trang được mở, đóng khi rời trang.
+ * `events` được đọc qua ref của BoardSync nên truyền hàm mới mỗi lần render cũng không sao.
+ */
+export function useBoardSync(boardId: string, events: SyncEvents): { sync: BoardSync | null; state: SyncSnapshot } {
+  const me = useMe();
+  const [sync, setSync] = useState<BoardSync | null>(null);
+  const [eventsRef] = useState(() => ({ current: events }));
+  eventsRef.current = events;
+
+  useEffect(() => {
+    const s = new BoardSync(boardId, getSocket(), me.id, {
+      onRejected: (req, err) => eventsRef.current.onRejected(req, err),
+      onRemoteOp: (op) => eventsRef.current.onRemoteOp(op),
+    });
+    s.start();
+    setSync(s);
+    return () => {
+      s.stop();
+      setSync(null);
+    };
+  }, [boardId, me.id, eventsRef]);
+
+  const state = useSyncExternalStore(sync?.subscribe ?? noopSubscribe, sync?.getSnapshot ?? (() => EMPTY));
+  return { sync, state };
+}

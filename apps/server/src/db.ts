@@ -8,6 +8,8 @@ import { HttpError } from "./errors";
 // Kiểu DATE (oid 1082) mặc định bị đổi thành Date theo múi giờ máy chủ,
 // dễ lệch một ngày. Giữ nguyên chuỗi 'YYYY-MM-DD'.
 pg.types.setTypeParser(1082, (v) => v);
+// BIGINT (oid 20) mặc định trả về chuỗi. Chỉ dùng cho seq của thao tác, còn rất xa 2^53, nên đổi thành số.
+pg.types.setTypeParser(20, (v) => Number(v));
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -91,6 +93,28 @@ export async function withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Prom
   }
 }
 
-export function isPgError(err: unknown, code: string): boolean {
-  return typeof err === "object" && err !== null && (err as { code?: string }).code === code;
+/**
+ * Đọc nhiều truy vấn trên CÙNG MỘT ảnh chụp dữ liệu (REPEATABLE READ): mọi câu SELECT thấy DB như ở
+ * thời điểm câu đầu tiên chạy. Dùng cho ảnh chụp bảng, để `seq` khớp đúng với cột/thẻ đọc ra — nếu đọc
+ * bằng nhiều kết nối riêng rẽ, một thao tác commit xen giữa sẽ làm thẻ đã đổi mà seq vẫn cũ (hoặc ngược lại).
+ */
+export async function withReadSnapshot<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export function isPgError(err: unknown, code: string, constraint?: string): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: string; constraint?: string };
+  return e.code === code && (constraint === undefined || e.constraint === constraint);
 }

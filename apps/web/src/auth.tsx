@@ -2,6 +2,7 @@ import type { AuthResult, LoginInput, RegisterInput, User } from "@tandem/shared
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, refreshSession, setAccessToken, setSessionLostHandler } from "./api";
+import { closeSocket } from "./realtime";
 
 type AuthState = { status: "loading" } | { status: "anon" } | { status: "authed"; user: User };
 
@@ -19,7 +20,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    setSessionLostHandler(() => setState({ status: "anon" }));
+    setSessionLostHandler(() => {
+      closeSocket();
+      setState({ status: "anon" });
+    });
     refreshSession().then((r) => setState(r ? { status: "authed", user: r.user } : { status: "anon" }));
   }, []);
 
@@ -35,6 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       register: async (input) => accept(await api<AuthResult>("/auth/register", { method: "POST", body: input })),
       logout: async () => {
         await api("/auth/logout", { method: "POST" }).catch(() => {});
+        closeSocket();
         setAccessToken(null);
         queryClient.clear();
         setState({ status: "anon" });

@@ -64,10 +64,13 @@ export async function requireCard(db: Db, userId: string, cardId: string, min: R
     version: number;
     deletedAt: string | null;
     deletedByName: string | null;
+    /** Lần cuối từng trường được sửa: { title: { v, by }, … } (xem migration 003). */
+    fieldVersions: Record<string, { v: number; by: string | null }>;
     role: Role | null;
   }>(
     `SELECT k.board_id AS "boardId", k.column_id AS "columnId", b.workspace_id AS "workspaceId",
-            k.version, k.deleted_at AS "deletedAt", du.display_name AS "deletedByName", m.role
+            k.version, k.deleted_at AS "deletedAt", du.display_name AS "deletedByName",
+            k.field_versions AS "fieldVersions", m.role
        FROM cards k
        JOIN boards b ON b.id = k.board_id
        LEFT JOIN users du ON du.id = k.deleted_by

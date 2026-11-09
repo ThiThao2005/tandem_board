@@ -836,3 +836,42 @@ a.tile:hover {
     transform: none;
   }
 }
+
+/* Trạng thái kết nối realtime (tuần 3) */
+.sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.sync-live .sync-dot {
+  background: var(--moss);
+}
+.sync-saving .sync-dot {
+  background: var(--moss);
+  animation: sync-pulse 1s ease-in-out infinite;
+}
+.sync-offline {
+  color: var(--clay);
+}
+.sync-offline .sync-dot {
+  background: var(--clay);
+}
+@keyframes sync-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-saving .sync-dot {
+    animation: none;
+  }
+}
