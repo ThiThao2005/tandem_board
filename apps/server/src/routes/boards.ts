@@ -1,19 +1,23 @@
 import {
   boardInput,
   cardCreateInput,
+  cardMoveInput,
   cardUpdateInput,
   columnCreateInput,
   columnUpdateInput,
+  evenPositions,
+  needsRebalance,
+  positionBetween,
   type Board,
   type BoardSnapshot,
   type Card,
+  type CardMoveResult,
   type Column,
 } from "@tandem/shared";
 import { Router } from "express";
-import { generateKeyBetween } from "fractional-indexing";
 import { requireBoard, requireCard, requireColumn, requireWorkspace } from "../access";
 import { uid } from "../auth/middleware";
-import { isPgError, pool, UNIQUE_VIOLATION, withTx, type Db } from "../db";
+import { isPgError, pool, RetryTransaction, UNIQUE_VIOLATION, withTx, type Db } from "../db";
 import { HttpError, notFound, parse, parseId } from "../errors";
 import { listMembers } from "./workspaces";
 
@@ -40,14 +44,13 @@ async function getCard(db: Db, id: string): Promise<Card> {
  * Vị trí cuối cột. Gọi bên trong transaction SAU KHI đã khóa dòng cột (hoặc bảng),
  * nên hai lần thêm song song không lấy trùng một vị trí.
  * Tính cả thẻ đã xóa mềm, để thẻ được khôi phục không trùng vị trí với thẻ mới.
- * (Tuần 2 sẽ thay bằng chèn vào giữa khi kéo thả.)
  */
-async function endOfColumn(db: Db, columnId: string): Promise<string> {
+async function endOfColumn(db: Db, columnId: string, exceptCardId: string | null = null): Promise<string> {
   const { rows } = await db.query<{ max: string | null }>(
-    "SELECT max(position) AS max FROM cards WHERE column_id = $1",
-    [columnId],
+    "SELECT max(position) AS max FROM cards WHERE column_id = $1 AND id IS DISTINCT FROM $2",
+    [columnId, exceptCardId],
   );
-  return generateKeyBetween(rows[0]?.max ?? null, null);
+  return positionBetween(rows[0]?.max ?? null, null);
 }
 
 async function endOfBoard(db: Db, boardId: string): Promise<string> {
@@ -55,7 +58,102 @@ async function endOfBoard(db: Db, boardId: string): Promise<string> {
     "SELECT max(position) AS max FROM columns WHERE board_id = $1",
     [boardId],
   );
-  return generateKeyBetween(rows[0]?.max ?? null, null);
+  return positionBetween(rows[0]?.max ?? null, null);
+}
+
+/**
+ * Chuẩn bị chuyển thẻ sang cột đích: khóa CẢ cột nguồn lẫn cột đích, rồi mới khóa thẻ.
+ *
+ * Thứ tự khóa trong cả file: CỘT TRƯỚC, THẺ SAU; nhiều cột thì theo id tăng dần.
+ * - Cột trước thẻ: sắp xếp lại cột phải sửa mọi thẻ trong cột khi đang giữ khóa cột. Nếu có chỗ
+ *   khóa thẻ trước rồi mới chờ cột thì A giữ thẻ X chờ cột D, B giữ cột D chờ thẻ X → deadlock.
+ * - Phải khóa cả cột nguồn: nếu chỉ khóa cột đích, hai người kéo chéo nhau (X: B→A, Y: A→B)
+ *   mà cả hai cột cùng phải sắp xếp lại thì A sửa Y (đang bị B giữ), B sửa X (đang bị A giữ)
+ *   → deadlock. Khóa cả hai cột thì hai lượt kéo này xếp hàng chờ nhau.
+ * - Theo id tăng dần: ai cũng khóa {A, B} theo cùng một thứ tự nên không ai giữ B mà chờ A.
+ *
+ * Cột nguồn đọc lúc chưa khóa; nếu trong lúc chờ khóa thẻ bị người khác chuyển sang cột khác
+ * thì ném RetryTransaction để withTx chạy lại từ đầu với cột nguồn mới.
+ */
+async function lockCardAndColumns(db: Db, userId: string, cardId: string, targetColumnId: string) {
+  const { boardId, columnId: sourceColumnId } = await requireCard(db, userId, cardId, "editor");
+  const { rows } = await db.query<{ id: string; boardId: string }>(
+    // LockRows nằm trên Sort trong kế hoạch thực thi → các dòng bị khóa đúng theo thứ tự id.
+    `SELECT id, board_id AS "boardId" FROM columns WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+    [[sourceColumnId, targetColumnId]],
+  );
+  // Cột đích phải thuộc cùng bảng với thẻ; kiểm tra bằng DB chứ không tin client.
+  if (rows.find((r) => r.id === targetColumnId)?.boardId !== boardId) throw notFound("Target column not found");
+
+  const card = await requireCard(db, userId, cardId, "editor", true);
+  if (card.columnId !== sourceColumnId) throw new RetryTransaction();
+  return card;
+}
+
+function cardDeleted(card: { deletedByName: string | null }) {
+  return new HttpError(410, "card_deleted", `This card was deleted by ${card.deletedByName ?? "someone else"}`, {
+    deletedBy: card.deletedByName,
+  });
+}
+
+interface MoveIntent {
+  columnId: string;
+  afterCardId: string | null;
+  beforeCardId: string | null;
+}
+
+/**
+ * Tính vị trí mới từ ý định của client, dựa trên hàng xóm HIỆN TẠI trong DB:
+ *  1. afterCardId còn trong cột → ngay sau thẻ đó (trước thẻ kế tiếp của nó);
+ *  2. không thì beforeCardId còn trong cột → ngay trước thẻ đó;
+ *  3. không thì nếu client thả lên đầu cột (after = null, before ≠ null) → đầu cột;
+ *  4. còn lại → cuối cột.
+ * Hàng xóm "không còn" là đã bị xóa, bị chuyển sang cột khác, hoặc chính là thẻ đang kéo.
+ * Phải gọi khi đang khóa cột đích, để "thẻ kế tiếp" không bị ai chen vào giữa chừng.
+ */
+async function positionForMove(db: Db, cardId: string, intent: MoveIntent): Promise<string> {
+  const { columnId } = intent;
+  const live = "column_id = $1 AND id <> $2 AND deleted_at IS NULL";
+  const one = async (sql: string, extra: unknown[] = []) =>
+    (await db.query<{ v: string | null }>(sql, [columnId, cardId, ...extra])).rows[0]?.v ?? null;
+  const anchor = (id: string | null) =>
+    id === null ? null : one(`SELECT position AS v FROM cards WHERE ${live} AND id = $3`, [id]);
+
+  const after = await anchor(intent.afterCardId);
+  if (after !== null) {
+    const next = await one(`SELECT min(position) AS v FROM cards WHERE ${live} AND position > $3 COLLATE "C"`, [after]);
+    return positionBetween(after, next);
+  }
+  const before = await anchor(intent.beforeCardId);
+  if (before !== null) {
+    const prev = await one(`SELECT max(position) AS v FROM cards WHERE ${live} AND position < $3 COLLATE "C"`, [before]);
+    return positionBetween(prev, before);
+  }
+  if (intent.afterCardId === null && intent.beforeCardId !== null) {
+    return positionBetween(null, await one(`SELECT min(position) AS v FROM cards WHERE ${live}`));
+  }
+  return endOfColumn(db, columnId, cardId);
+}
+
+/**
+ * Sắp xếp lại cả cột khi vị trí quá dài: giữ nguyên thứ tự hiện tại, gán lại các
+ * vị trí ngắn "a0", "a1", … Tính cả thẻ đã xóa mềm để khi khôi phục chúng vẫn về
+ * đúng chỗ cũ. Không tăng version: đổi vị trí không phải là sửa nội dung thẻ.
+ * Phải gọi khi đang khóa cột.
+ */
+async function rebalanceColumn(db: Db, columnId: string): Promise<CardMoveResult["rebalanced"]> {
+  const { rows } = await db.query<{ id: string }>("SELECT id FROM cards WHERE column_id = $1 ORDER BY position, id", [
+    columnId,
+  ]);
+  const ids = rows.map((r) => r.id);
+  const positions = evenPositions(ids.length);
+  await db.query(
+    `UPDATE cards AS k SET position = v.position
+       FROM unnest($1::uuid[], $2::text[]) AS v(id, position)
+      WHERE k.id = v.id AND k.column_id = $3`,
+    [ids, positions, columnId],
+  );
+  return ids.map((id, i) => ({ id, position: positions[i]! }));
 }
 
 // ---------- Bảng ----------
@@ -80,10 +178,13 @@ boardsRouter.post("/workspaces/:id/boards", async (req, res) => {
       [workspaceId, title, uid(req)],
     );
     const board = rows[0]!;
-    let pos: string | null = null;
-    for (const colTitle of DEFAULT_COLUMNS) {
-      pos = generateKeyBetween(pos, null);
-      await c.query("INSERT INTO columns (board_id, title, position) VALUES ($1, $2, $3)", [board.id, colTitle, pos]);
+    const positions = evenPositions(DEFAULT_COLUMNS.length);
+    for (const [i, colTitle] of DEFAULT_COLUMNS.entries()) {
+      await c.query("INSERT INTO columns (board_id, title, position) VALUES ($1, $2, $3)", [
+        board.id,
+        colTitle,
+        positions[i],
+      ]);
     }
     return board;
   });
@@ -96,9 +197,10 @@ boardsRouter.get("/boards/:id", async (req, res) => {
   const access = await requireBoard(pool, uid(req), boardId, "viewer");
   const [board, columns, cards, members] = await Promise.all([
     pool.query<Board>(`SELECT ${BOARD_COLS} FROM boards WHERE id = $1`, [boardId]),
-    pool.query<Column>(`SELECT ${COLUMN_COLS} FROM columns WHERE board_id = $1 ORDER BY position`, [boardId]),
+    pool.query<Column>(`SELECT ${COLUMN_COLS} FROM columns WHERE board_id = $1 ORDER BY position, id`, [boardId]),
+    // Trùng vị trí (rất hiếm, nhờ jitter) thì xếp theo id, để ai tải bảng cũng thấy cùng một thứ tự.
     pool.query<Card>(
-      `SELECT ${CARD_COLS} FROM cards k WHERE k.board_id = $1 AND k.deleted_at IS NULL ORDER BY k.position`,
+      `SELECT ${CARD_COLS} FROM cards k WHERE k.board_id = $1 AND k.deleted_at IS NULL ORDER BY k.position, k.id`,
       [boardId],
     ),
     listMembers(pool, access.workspaceId),
@@ -209,13 +311,13 @@ boardsRouter.patch("/cards/:id", async (req, res) => {
   const input = parse(cardUpdateInput, req.body);
   const me = uid(req);
   const card = await withTx(async (c) => {
-    const current = await requireCard(c, me, cardId, "editor", true);
+    // Đổi cột: khóa cột nguồn + cột đích TRƯỚC khi khóa thẻ (xem lockCardAndColumns).
+    const current =
+      input.columnId !== undefined
+        ? await lockCardAndColumns(c, me, cardId, input.columnId)
+        : await requireCard(c, me, cardId, "editor", true);
+    if (current.deletedAt) throw cardDeleted(current);
 
-    if (current.deletedAt) {
-      throw new HttpError(410, "card_deleted", `This card was deleted by ${current.deletedByName ?? "someone else"}`, {
-        deletedBy: current.deletedByName,
-      });
-    }
     // Tuần 1: so cả thẻ. Tuần 3 sẽ đổi thành so từng trường.
     if (input.baseVersion !== undefined && input.baseVersion !== current.version) {
       throw new HttpError(409, "version_conflict", "Someone else just edited this card", { card: await getCard(c, cardId) });
@@ -241,12 +343,6 @@ boardsRouter.patch("/cards/:id", async (req, res) => {
       set("assignee_id", input.assigneeId);
     }
     if (input.columnId !== undefined && input.columnId !== current.columnId) {
-      // Cột đích phải thuộc cùng bảng; kiểm tra bằng DB chứ không tin client.
-      const target = await c.query<{ boardId: string }>(
-        `SELECT board_id AS "boardId" FROM columns WHERE id = $1 FOR UPDATE`,
-        [input.columnId],
-      );
-      if (target.rows[0]?.boardId !== current.boardId) throw notFound("Target column not found");
       set("column_id", input.columnId);
       set("position", await endOfColumn(c, input.columnId));
     }
@@ -261,6 +357,27 @@ boardsRouter.patch("/cards/:id", async (req, res) => {
     return getCard(c, cardId);
   });
   res.json(card);
+});
+
+/** Kéo thả thẻ: sang chỗ khác trong cùng cột, hoặc sang cột khác của cùng bảng. */
+boardsRouter.post("/cards/:id/move", async (req, res) => {
+  const cardId = parseId(req.params.id);
+  const intent = parse(cardMoveInput, req.body);
+  const me = uid(req);
+  const result = await withTx(async (c): Promise<CardMoveResult> => {
+    const current = await lockCardAndColumns(c, me, cardId, intent.columnId);
+    if (current.deletedAt) throw cardDeleted(current);
+
+    const position = await positionForMove(c, cardId, intent);
+    await c.query(
+      `UPDATE cards SET column_id = $2, position = $3, version = version + 1, updated_by = $4, updated_at = now()
+        WHERE id = $1`,
+      [cardId, intent.columnId, position, me],
+    );
+    const rebalanced = needsRebalance(position) ? await rebalanceColumn(c, intent.columnId) : [];
+    return { card: await getCard(c, cardId), rebalanced };
+  });
+  res.json(result);
 });
 
 /** Xóa mềm: thẻ vẫn còn trong DB để khôi phục và để báo cho người đang sửa dở. */

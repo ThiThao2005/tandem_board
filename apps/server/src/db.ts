@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { config } from "./config";
+import { HttpError } from "./errors";
 
 // Kiểu DATE (oid 1082) mặc định bị đổi thành Date theo múi giờ máy chủ,
 // dễ lệch một ngày. Giữ nguyên chuỗi 'YYYY-MM-DD'.
@@ -39,7 +40,21 @@ export const pool = new pg.Pool({
 /** Pool hoặc một client đang trong transaction. */
 export type Db = pg.Pool | pg.PoolClient;
 
-export async function withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+/** Mã lỗi Postgres khi vi phạm ràng buộc UNIQUE. */
+export const UNIQUE_VIOLATION = "23505";
+const DEADLOCK_DETECTED = "40P01";
+const SERIALIZATION_FAILURE = "40001";
+
+/**
+ * Ném ra bên trong transaction khi dữ liệu vừa đọc đã bị người khác đổi trong lúc chờ khóa
+ * (vd. thẻ vừa bị chuyển sang cột khác). withTx sẽ rollback rồi chạy lại từ đầu.
+ */
+export class RetryTransaction extends Error {}
+
+/** Số lần chạy lại tối đa khi gặp deadlock hoặc RetryTransaction. */
+const TX_RETRIES = 3;
+
+async function runTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -54,8 +69,27 @@ export async function withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Prom
   }
 }
 
-/** Mã lỗi Postgres khi vi phạm ràng buộc UNIQUE. */
-export const UNIQUE_VIOLATION = "23505";
+/**
+ * Chạy fn trong một transaction. Gặp deadlock (Postgres tự hủy một bên) hoặc RetryTransaction
+ * thì rollback, chờ một khoảng ngẫu nhiên rồi chạy lại cả transaction. Vì vậy fn không được
+ * có tác dụng phụ bên ngoài DB (gửi mail, phát WebSocket…) — những việc đó làm SAU khi withTx xong.
+ */
+export async function withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await runTx(fn);
+    } catch (err) {
+      const retryable =
+        err instanceof RetryTransaction || isPgError(err, DEADLOCK_DETECTED) || isPgError(err, SERIALIZATION_FAILURE);
+      if (!retryable) throw err;
+      if (attempt >= TX_RETRIES) {
+        throw new HttpError(409, "busy", "Someone else is changing this right now. Please try again");
+      }
+      // Chờ ngẫu nhiên để hai bên không đụng nhau lần nữa ở đúng cùng thời điểm.
+      await new Promise((r) => setTimeout(r, 10 + Math.random() * 40 * (attempt + 1)));
+    }
+  }
+}
 
 export function isPgError(err: unknown, code: string): boolean {
   return typeof err === "object" && err !== null && (err as { code?: string }).code === code;

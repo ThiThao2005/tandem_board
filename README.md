@@ -45,7 +45,7 @@ npm test
 ## Tiến độ
 
 - [x] Tuần 1: đăng nhập, nhóm + mời thành viên, bảng → cột → thẻ
-- [ ] Tuần 2: kéo thả, vị trí kiểu phân số
+- [x] Tuần 2: kéo thả, vị trí kiểu phân số (có jitter), tự sắp xếp lại cột
 - [ ] Tuần 3: đồng bộ realtime qua WebSocket
 - [ ] Tuần 4: thấy ai đang online
 - [ ] Tuần 5: ghi chú nhiều người cùng gõ (Yjs)
