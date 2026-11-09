@@ -1,0 +1,24 @@
+{
+  "name": "tandem",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @tandem/server\" \"npm run dev -w @tandem/web\"",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "migrate": "npm run migrate -w @tandem/server",
+    "test": "npm test -w @tandem/server",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
