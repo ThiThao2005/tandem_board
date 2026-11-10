@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { NoteSummary } from "./notes";
 
 // ---------- Vai trò ----------
 
@@ -174,6 +175,8 @@ export interface Card {
   deletedAt: string | null;
   updatedAt: string;
   updatedBy: string | null;
+  /** Tóm tắt ghi chú (tuần 5): có chữ không, tiến độ checklist. null = chưa có ghi chú. */
+  note: NoteSummary | null;
 }
 
 export interface CardMoveResult {

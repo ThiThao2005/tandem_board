@@ -100,7 +100,7 @@ function editorsByCard(presence: PresenceUser[], memberById: Map<string, Member>
     const member = memberById.get(p.userId);
     if (!p.cardId || p.userId === meId || !member) continue;
     const list = result.get(p.cardId) ?? [];
-    list.push({ member, away: p.status === "away" });
+    list.push({ member, away: p.status === "away", typing: p.typing });
     result.set(p.cardId, list);
   }
   return result;
@@ -139,6 +139,15 @@ export function BoardPage() {
       } else {
         toast({ message: err.message, tone: "error" });
       }
+    },
+    onNoteRejected: (_cardId, err) => {
+      const message =
+        err.code === "forbidden"
+          ? "You can only view these notes now. Your latest note changes weren't saved."
+          : err.code === "note_too_large"
+            ? "This note is too long. Your latest change wasn't saved."
+            : `${err.message}. Your latest note changes weren't saved.`;
+      toast({ message, tone: "error" });
     },
     onRemoteOp: (op) => {
       // Thẻ đang mở bị người khác xóa: hộp thoại tự đóng (thẻ biến mất), báo ai xóa và cho khôi phục.
@@ -370,6 +379,8 @@ export function BoardPage() {
           others={editing.get(openCard.id) ?? []}
           canEdit={canEdit}
           actions={actions}
+          sync={sync}
+          me={me}
           onClose={() => setOpenCardId(null)}
         />
       )}

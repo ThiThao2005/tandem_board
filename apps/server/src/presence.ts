@@ -21,6 +21,8 @@ interface Entry {
   userId: string;
   status: PresenceStatus;
   cardId: string | null;
+  /** Đang gõ ghi chú của cardId (tuần 5). */
+  typing: boolean;
   /** Lần cuối nghe tin từ kết nối này. */
   lastSeen: number;
   /** Lúc vào bảng: dùng để xếp thứ tự avatar cho ổn định. */
@@ -48,7 +50,7 @@ export class PresenceStore {
     boardId: string,
     socketId: string,
     userId: string,
-    state: { status: PresenceStatus; cardId: string | null },
+    state: { status: PresenceStatus; cardId: string | null; typing?: boolean },
     now: number,
   ): boolean {
     return this.change(boardId, () => {
@@ -59,6 +61,8 @@ export class PresenceStore {
         userId,
         status: state.status,
         cardId: state.cardId,
+        // Chỉ "đang gõ" khi đang mở một thẻ.
+        typing: state.cardId !== null && state.typing === true,
         lastSeen: now,
         joinedAt: old?.joinedAt ?? now,
         cardAt: old && old.cardId === state.cardId ? old.cardAt : now,
@@ -69,7 +73,7 @@ export class PresenceStore {
   /** Như `set` nhưng không đè trạng thái đã có (lúc vào bảng, client có thể đã kịp gửi trạng thái thật). */
   ensure(boardId: string, socketId: string, userId: string, now: number): boolean {
     if (this.boards.get(boardId)?.has(socketId)) return false;
-    return this.set(boardId, socketId, userId, { status: "active", cardId: null }, now);
+    return this.set(boardId, socketId, userId, { status: "active", cardId: null, typing: false }, now);
   }
 
   /** Kết nối rời bảng (rời phòng, mất kết nối, bị xóa khỏi nhóm). */
@@ -102,12 +106,13 @@ export class PresenceStore {
 
   /** Danh sách người trên bảng, mỗi người một dòng, xếp theo lúc vào bảng. */
   list(boardId: string): PresenceUser[] {
+    const entries = [...(this.boards.get(boardId)?.values() ?? [])];
     const byUser = new Map<string, { user: PresenceUser; joinedAt: number; cardAt: number }>();
-    for (const e of this.boards.get(boardId)?.values() ?? []) {
+    for (const e of entries) {
       const cur = byUser.get(e.userId);
       if (!cur) {
         byUser.set(e.userId, {
-          user: { userId: e.userId, status: e.status, cardId: e.cardId },
+          user: { userId: e.userId, status: e.status, cardId: e.cardId, typing: false },
           joinedAt: e.joinedAt,
           cardAt: e.cardId ? e.cardAt : -Infinity,
         });
@@ -119,6 +124,10 @@ export class PresenceStore {
         cur.user.cardId = e.cardId;
         cur.cardAt = e.cardAt;
       }
+    }
+    // Đang gõ: có tab nào của người đó đang gõ ĐÚNG thẻ được hiện (thẻ mở gần nhất).
+    for (const { user } of byUser.values()) {
+      user.typing = user.cardId !== null && entries.some((e) => e.userId === user.userId && e.cardId === user.cardId && e.typing);
     }
     return [...byUser.values()]
       .sort((a, b) => a.joinedAt - b.joinedAt || (a.user.userId < b.user.userId ? -1 : 1))

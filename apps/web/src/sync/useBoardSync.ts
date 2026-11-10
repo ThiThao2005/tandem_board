@@ -20,6 +20,7 @@ export function useBoardSync(boardId: string, events: SyncEvents): { sync: Board
     const s = new BoardSync(boardId, getSocket(), me.id, {
       onRejected: (req, err) => eventsRef.current.onRejected(req, err),
       onRemoteOp: (op) => eventsRef.current.onRemoteOp(op),
+      onNoteRejected: (cardId, err) => eventsRef.current.onNoteRejected(cardId, err),
     });
     s.start();
     setSync(s);
@@ -36,6 +37,16 @@ export function useBoardSync(boardId: string, events: SyncEvents): { sync: Board
     update();
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
+  }, [sync]);
+
+  // Còn ghi chú chưa tới server (đang mất mạng) mà đóng tab: hỏi lại trước.
+  useEffect(() => {
+    if (!sync) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      if (sync.unsyncedNotes > 0) e.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
   }, [sync]);
 
   const state = useSyncExternalStore(sync?.subscribe ?? noopSubscribe, sync?.getSnapshot ?? (() => EMPTY));

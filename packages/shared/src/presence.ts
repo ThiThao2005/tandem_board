@@ -20,8 +20,10 @@ export const presenceUpdateInput = z.object({
   status: presenceStatus,
   /** Thẻ đang mở để sửa (hộp thoại thẻ), null nếu không mở thẻ nào. */
   cardId: z.string().uuid().nullable(),
+  /** Đang gõ ghi chú của thẻ cardId (tuần 5). Để mặt thẻ trên bảng hiện "đang gõ…". */
+  typing: z.boolean().default(false),
 });
-export type PresenceUpdateInput = z.infer<typeof presenceUpdateInput>;
+export type PresenceUpdateInput = z.input<typeof presenceUpdateInput>;
 
 /** Một người trên bảng: gộp mọi tab/kết nối của người đó. */
 export interface PresenceUser {
@@ -30,6 +32,8 @@ export interface PresenceUser {
   status: PresenceStatus;
   /** Thẻ người đó đang mở (tab nào mở gần nhất thì lấy tab đó), hoặc null. */
   cardId: string | null;
+  /** Đang gõ ghi chú của thẻ cardId (tuần 5). */
+  typing: boolean;
 }
 
 export interface BoardPresence {

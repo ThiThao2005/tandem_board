@@ -9,6 +9,8 @@ import type { TandemSocket } from "../realtime";
 export interface PresenceState {
   status: PresenceStatus;
   cardId: string | null;
+  /** Đang gõ ghi chú của cardId (tuần 5). */
+  typing: boolean;
 }
 
 /**
@@ -21,7 +23,7 @@ export interface PresenceState {
  */
 export class PresenceTracker {
   private users: PresenceUser[] = [];
-  private mine: PresenceState = { status: "active", cardId: null };
+  private mine: PresenceState = { status: "active", cardId: null, typing: false };
   private isJoined = false;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private off: (() => void) | null = null;
@@ -74,7 +76,9 @@ export class PresenceTracker {
 
   set(patch: Partial<PresenceState>) {
     const next = { ...this.mine, ...patch };
-    if (next.status === this.mine.status && next.cardId === this.mine.cardId) return;
+    // Đóng thẻ thì hết "đang gõ".
+    if (next.cardId === null) next.typing = false;
+    if (next.status === this.mine.status && next.cardId === this.mine.cardId && next.typing === this.mine.typing) return;
     this.mine = next;
     this.send();
   }
