@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   evenPositions,
   MAX_CATCHUP_OPS,
@@ -10,6 +11,7 @@ import {
   type CardMoveResult,
   type CatchUp,
   type Column,
+  type NoteSummary,
   type OpPayload,
   type OpRequest,
   type OpResult,
@@ -42,7 +44,7 @@ export const BOARD_COLS = `id, workspace_id AS "workspaceId", title`;
 const COLUMN_COLS = `id, board_id AS "boardId", title, position`;
 const CARD_COLS = `k.id, k.board_id AS "boardId", k.column_id AS "columnId", k.title,
   k.due_date AS "dueDate", k.assignee_id AS "assigneeId", k.position, k.version,
-  k.deleted_at AS "deletedAt", k.updated_at AS "updatedAt", k.updated_by AS "updatedBy"`;
+  k.deleted_at AS "deletedAt", k.updated_at AS "updatedAt", k.updated_by AS "updatedBy", k.note_summary AS "note"`;
 const OP_COLS = `seq, op_id AS "opId", board_id AS "boardId", actor_id AS "actorId", type, payload,
   created_at AS "createdAt"`;
 
@@ -504,6 +506,55 @@ export async function executeOp(me: string, req: OpRequest, expectedBoardId?: st
       if (op) return duplicateOf(op, me, req, expectedBoardId);
     }
     if (isPgError(err, UNIQUE_VIOLATION)) throw idTaken();
+    throw err;
+  }
+}
+
+// ---------- Tóm tắt ghi chú (tuần 5) ----------
+
+/** Tóm tắt không đổi: rollback để trả lại seq vừa lấy. */
+class NoChange extends Error {}
+
+/**
+ * Ghi tóm tắt ghi chú mới (có chữ / tiến độ checklist) lên thẻ, như một thao tác "card.notes" có seq —
+ * để mặt thẻ của mọi người cập nhật và để gửi bù / ảnh chụp bảng vẫn đúng. Server tự gọi sau khi lưu
+ * trạng thái Yjs (không phải yêu cầu của client), nên opId do server sinh.
+ *
+ * Thứ tự khóa như mọi thao tác: BẢNG (last_seq + 1) → THẺ. Tóm tắt không đổi thì rollback, không tốn seq.
+ * Trả về thao tác để nơi gọi phát cho phòng SAU khi commit; null nếu không đổi.
+ */
+export async function recordNoteSummary(
+  boardId: string,
+  cardId: string,
+  summary: NoteSummary | null,
+  actorId: string | null,
+): Promise<BoardOp | null> {
+  try {
+    return await withTx(async (c) => {
+      const { rows } = await c.query<{ seq: number }>(
+        "UPDATE boards SET last_seq = last_seq + 1 WHERE id = $1 RETURNING last_seq AS seq",
+        [boardId],
+      );
+      if (!rows[0]) throw new NoChange();
+      // Không tăng version và không đụng field_versions: tóm tắt không phải là trường người dùng sửa,
+      // nên không được làm người đang sửa tiêu đề bị báo xung đột.
+      const updated = await c.query(
+        `UPDATE cards AS k SET note_summary = $3::jsonb
+          WHERE k.id = $1 AND k.board_id = $2 AND k.note_summary IS DISTINCT FROM $3::jsonb
+          RETURNING ${CARD_COLS}`,
+        [cardId, boardId, summary === null ? null : JSON.stringify(summary)],
+      );
+      if (!updated.rows[0]) throw new NoChange();
+      const result = { type: "card.notes" as const, payload: { card: toCard(updated.rows[0]) } };
+      const inserted = await c.query(
+        `INSERT INTO operations (board_id, seq, op_id, actor_id, type, payload)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING ${OP_COLS}`,
+        [boardId, rows[0].seq, randomUUID(), actorId, result.type, JSON.stringify(result.payload)],
+      );
+      return toOp(inserted.rows[0]);
+    });
+  } catch (err) {
+    if (err instanceof NoChange) return null;
     throw err;
   }
 }

@@ -29,6 +29,7 @@ function card(n: number, position: string, columnId = TODO, extra: Partial<Card>
     deletedAt: null,
     updatedAt: "2026-11-09T00:00:00.000Z",
     updatedBy: null,
+    note: null,
     ...extra,
   };
 }

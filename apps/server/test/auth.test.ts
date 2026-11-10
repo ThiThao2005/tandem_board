@@ -63,17 +63,31 @@ describe("refresh token xoay vòng", () => {
     await request(app).post("/api/auth/refresh").set("Cookie", newCookie).expect(401);
   });
 
-  it("hai tab làm mới gần như cùng lúc thì tab chậm hơn được báo thử lại, không bị đăng xuất", async () => {
+  it("hai tab làm mới gần như cùng lúc: tab chậm hơn cũng nhận token mới, không bị đăng xuất", async () => {
     const u = await registerUser();
     const first = await request(app).post("/api/auth/refresh").set("Cookie", u.cookie).expect(200);
-    const race = await request(app).post("/api/auth/refresh").set("Cookie", u.cookie).expect(401);
-    expect(race.body.error.code).toBe("refresh_race");
+    const second = await request(app).post("/api/auth/refresh").set("Cookie", u.cookie).expect(200);
+    // Cả hai token mới đều dùng được.
     await request(app).post("/api/auth/refresh").set("Cookie", refreshCookieFrom(first)).expect(200);
+    await request(app).post("/api/auth/refresh").set("Cookie", refreshCookieFrom(second)).expect(200);
   });
 
-  it("đăng xuất thu hồi refresh token", async () => {
+  // Lỗi tìm ra ở tuần 5 (NOTES): tải lại trang đúng lúc /auth/refresh đang chạy → server đã xoay token nhưng
+  // trình duyệt không nhận cookie mới → lần sau gửi token cũ → trước đây 401 rồi bị đăng xuất.
+  it("tải lại trang giữa lúc làm mới (không nhận được cookie mới): token cũ vẫn dùng được trong thời gian ân hạn", async () => {
     const u = await registerUser();
-    await request(app).post("/api/auth/logout").set("Cookie", u.cookie).expect(204);
+    await request(app).post("/api/auth/refresh").set("Cookie", u.cookie).expect(200); // cookie mới bị mất
+    const retry = await request(app).post("/api/auth/refresh").set("Cookie", u.cookie).expect(200);
+    expect(retry.body.accessToken).toBeTruthy();
+    await request(app).post("/api/auth/refresh").set("Cookie", refreshCookieFrom(retry)).expect(200);
+  });
+
+  it("đăng xuất thu hồi refresh token, kể cả token vừa bị xoay vòng trong thời gian ân hạn", async () => {
+    const u = await registerUser();
+    const next = await request(app).post("/api/auth/refresh").set("Cookie", u.cookie).expect(200);
+    await request(app).post("/api/auth/logout").set("Cookie", refreshCookieFrom(next)).expect(204);
+    await request(app).post("/api/auth/refresh").set("Cookie", refreshCookieFrom(next)).expect(401);
+    // Token cũ vừa bị xoay vòng vài giây trước: phiên đã đăng xuất nên không được ân hạn.
     await request(app).post("/api/auth/refresh").set("Cookie", u.cookie).expect(401);
   });
 });

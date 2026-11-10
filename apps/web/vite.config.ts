@@ -7,6 +7,37 @@ const env = (globalThis as { process?: { env: Record<string, string | undefined>
 
 export default defineConfig({
   plugins: [react()],
+  // Editor ghi chú (tuần 5) được tải lười; khai báo trước để lần đầu mở thẻ Vite không phải tối ưu
+  // thư viện mới rồi tải lại cả trang.
+  optimizeDeps: {
+    include: [
+      "yjs",
+      "y-protocols/awareness",
+      "@tiptap/react",
+      "@tiptap/starter-kit",
+      "@tiptap/extension-collaboration",
+      "@tiptap/extension-collaboration-caret",
+      "@tiptap/extension-list",
+      "@tiptap/extensions",
+    ],
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        // Tách thư viện ít đổi ra file riêng: trình duyệt giữ cache được lâu (code app đổi thì chỉ tải lại file
+        // của app), và không còn một file > 500 KB. TipTap không nằm ở đây: nó vẫn ở chunk tải lười của editor.
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|scheduler)[\\/]/.test(id)) return "vendor-react";
+          if (/[\\/]node_modules[\\/](socket\.io-client|engine\.io-client|socket\.io-parser|engine\.io-parser)[\\/]/.test(id)) {
+            return "vendor-socket";
+          }
+          if (/[\\/]node_modules[\\/](yjs|y-protocols|lib0)[\\/]/.test(id)) return "vendor-yjs";
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     port: Number(env.WEB_PORT ?? 5173),
     strictPort: true,

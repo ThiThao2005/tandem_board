@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { comparePositioned, positionBetween } from "./position";
+import type { NoteAwarenessInput, NoteClosedReason, NoteOpenInput, NoteOpenResult, NoteUpdateInput } from "./notes";
 import type { BoardPresence, PresenceUpdateInput } from "./presence";
 import {
   boardInput,
@@ -60,10 +61,15 @@ export type OpResult =
   | { type: "column.create" | "column.update"; payload: { column: Column } }
   | { type: "column.delete"; payload: { columnId: string } }
   | { type: "card.create" | "card.update" | "card.delete" | "card.restore"; payload: { card: Card } }
+  /**
+   * Tóm tắt ghi chú của thẻ đổi (tuần 5). Không có yêu cầu nào từ client sinh ra loại này: server tự ghi
+   * khi lưu trạng thái Yjs mà thấy tóm tắt (có chữ / tiến độ checklist) khác trước.
+   */
+  | { type: "card.notes"; payload: { card: Card } }
   | { type: "card.move"; payload: CardMoveResult };
 
 /** payload kết quả của một loại thao tác. (Extract không dùng được vì vài nhánh gộp nhiều type.) */
-export type ResultPayload<T extends OpType> = (OpResult & { type: T })["payload"];
+export type ResultPayload<T extends OpResult["type"]> = (OpResult & { type: T })["payload"];
 
 export type BoardOp = OpResult & {
   /** Tăng liên tục 1, 2, 3… riêng cho từng bảng, không có lỗ. */
@@ -100,6 +106,7 @@ export type Ack<T extends object = object> = ({ ok: true } & T) | { ok: false; e
 
 export type OpAck = Ack<{ op: BoardOp; duplicate: boolean }>;
 export type JoinAck = Ack<{ role: Role; catchUp: CatchUp }>;
+export type NoteOpenAck = Ack<NoteOpenResult>;
 
 /** Mã lỗi trong `connect_error` (err.data.code) và sự kiện ngắt kết nối. */
 export const SOCKET_AUTH_ERRORS = ["unauthorized", "token_expired"] as const;
@@ -117,6 +124,12 @@ export interface ServerToClientEvents {
   "board.deleted": (msg: { boardId: string }) => void;
   /** Danh sách người đang ở trên bảng (cả danh sách, gửi mỗi khi nó đổi và ngay sau khi vào bảng). */
   presence: (msg: BoardPresence) => void;
+  /** Ghi chú (tuần 5): thay đổi Yjs của người khác trên thẻ đang mở. */
+  "note.update": (msg: { cardId: string; update: Uint8Array }) => void;
+  /** Con trỏ / "đang gõ" của người khác (y-protocols awareness, đã được server làm sạch). */
+  "note.awareness": (msg: { cardId: string; update: Uint8Array }) => void;
+  /** Server đóng ghi chú này của mình (mất quyền, thẻ bị xóa hẳn…). */
+  "note.closed": (msg: { cardId: string; reason: NoteClosedReason }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -126,6 +139,10 @@ export interface ClientToServerEvents {
   "auth.refresh": (token: string, ack: (res: Ack) => void) => void;
   /** Trạng thái của tab này trên bảng: vừa là thông báo thay đổi vừa là heartbeat. Ack không bắt buộc. */
   "presence.update": (msg: PresenceUpdateInput, ack?: (res: Ack) => void) => void;
+  "note.open": (msg: NoteOpenInput, ack: (res: NoteOpenAck) => void) => void;
+  "note.update": (msg: NoteUpdateInput, ack: (res: Ack) => void) => void;
+  "note.awareness": (msg: NoteAwarenessInput) => void;
+  "note.close": (msg: { cardId: string }) => void;
 }
 
 // ---------- Áp dụng thao tác ----------
@@ -164,7 +181,8 @@ export function applyResult<S extends BoardState>(s: S, r: OpResult): S {
     case "card.create":
     case "card.update":
     case "card.delete":
-    case "card.restore": {
+    case "card.restore":
+    case "card.notes": {
       const card = r.payload.card;
       // Ảnh chụp chỉ chứa thẻ chưa xóa.
       return { ...s, cards: card.deletedAt ? s.cards.filter((k) => k.id !== card.id) : upsert(s.cards, card) };
@@ -250,6 +268,7 @@ export function optimisticUpdate(view: BoardState, req: OpRequest, ctx: Optimist
         deletedAt: null,
         updatedAt: now,
         updatedBy: ctx.userId,
+        note: null,
       };
       return (s) =>
         s.cards.some((k) => k.id === id) || !s.columns.some((c) => c.id === columnId) ? s : { ...s, cards: upsert(s.cards, card) };

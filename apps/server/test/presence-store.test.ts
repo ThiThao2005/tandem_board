@@ -13,7 +13,7 @@ describe("PresenceStore", () => {
     expect(p.set(B, "s1", "an", active, 0)).toBe(true);
     expect(p.set(B, "s1", "an", active, 15_000)).toBe(false); // heartbeat
     expect(p.set(B, "s1", "an", { status: "active", cardId: "the-1" }, 16_000)).toBe(true);
-    expect(p.list(B)).toEqual([{ userId: "an", status: "active", cardId: "the-1" }]);
+    expect(p.list(B)).toEqual([{ userId: "an", status: "active", cardId: "the-1", typing: false }]);
   });
 
   it("heartbeat gia hạn: tab gửi đều thì không bao giờ bị dọn", () => {
@@ -43,7 +43,7 @@ describe("PresenceStore", () => {
       expect(p.sweep(t - 1)).toEqual([]);
       p.set(B, "s1", "an", away, t);
     }
-    expect(p.list(B)).toEqual([{ userId: "an", status: "away", cardId: null }]);
+    expect(p.list(B)).toEqual([{ userId: "an", status: "away", cardId: null, typing: false }]);
   });
 
   it("tab ẩn mà im hẳn (bị trình duyệt đóng băng) thì cuối cùng vẫn bị dọn", () => {
@@ -57,10 +57,10 @@ describe("PresenceStore", () => {
     const p = new PresenceStore();
     p.set(B, "tab1", "an", away, 0);
     expect(p.set(B, "tab2", "an", active, 1)).toBe(true);
-    expect(p.list(B)).toEqual([{ userId: "an", status: "active", cardId: null }]);
+    expect(p.list(B)).toEqual([{ userId: "an", status: "active", cardId: null, typing: false }]);
     // Đóng tab đang hiện → còn tab ẩn.
     expect(p.remove(B, "tab2")).toBe(true);
-    expect(p.list(B)).toEqual([{ userId: "an", status: "away", cardId: null }]);
+    expect(p.list(B)).toEqual([{ userId: "an", status: "away", cardId: null, typing: false }]);
     // Đóng nốt → không còn ai.
     expect(p.remove(B, "tab1")).toBe(true);
     expect(p.list(B)).toEqual([]);
@@ -91,7 +91,7 @@ describe("PresenceStore", () => {
     expect(p.ensure(B, "s1", "an", 0)).toBe(true);
     p.set(B, "s1", "an", { status: "away", cardId: "the-1" }, 1);
     expect(p.ensure(B, "s1", "an", 2)).toBe(false);
-    expect(p.list(B)).toEqual([{ userId: "an", status: "away", cardId: "the-1" }]);
+    expect(p.list(B)).toEqual([{ userId: "an", status: "away", cardId: "the-1", typing: false }]);
   });
 
   it("xếp theo lúc vào bảng, không đổi thứ tự khi ai đó cập nhật", () => {

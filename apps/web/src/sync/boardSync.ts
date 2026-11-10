@@ -12,6 +12,7 @@ import {
 } from "@tandem/shared";
 import { api } from "../api";
 import type { TandemSocket } from "../realtime";
+import { NoteSync } from "./noteSync";
 import { PresenceTracker, type PresenceState } from "./presence";
 
 export type SyncStatus = "connecting" | "live" | "reconnecting" | "gone";
@@ -31,6 +32,8 @@ export interface SyncSnapshot {
 export interface SyncEvents {
   /** Server từ chối một thao tác của mình (bản lạc quan đã được bỏ). */
   onRejected: (req: OpRequest, error: SocketErrorBody) => void;
+  /** Server từ chối thay đổi ghi chú của mình (tuần 5): phần chưa lưu của ghi chú đó bị bỏ. */
+  onNoteRejected: (cardId: string, error: SocketErrorBody) => void;
   /** Thao tác của NGƯỜI KHÁC vừa được áp dụng. */
   onRemoteOp: (op: BoardOp) => void;
 }
@@ -69,6 +72,13 @@ export class BoardSync {
   private joining = false;
   private offs: (() => void)[] = [];
   private readonly presence: PresenceTracker;
+  /** Lắng nghe mỗi lần vào (lại) phòng thành công — ghi chú mở lại sau khi kết nối lại. */
+  private joinedListeners = new Set<() => void>();
+  /**
+   * Ghi chú đang dùng (tuần 5): cardId → đồng bộ + số chỗ đang dùng. Đóng hộp thoại khi ghi chú còn thay đổi
+   * chưa tới server (đang mất mạng) thì CHƯA hủy: giữ tới khi gửi xong, để đóng hộp thoại không làm mất chữ.
+   */
+  private notes = new Map<string, { sync: NoteSync; refs: number; off?: () => void }>();
 
   constructor(
     readonly boardId: string,
@@ -157,6 +167,12 @@ export class BoardSync {
   stop() {
     this.stopped = true;
     clearTimeout(this.gapTimer);
+    for (const entry of this.notes.values()) {
+      entry.off?.();
+      entry.sync.stop();
+    }
+    this.notes.clear();
+    this.joinedListeners.clear();
     this.presence.stop();
     for (const off of this.offs) off();
     this.offs = [];
@@ -214,6 +230,7 @@ export class BoardSync {
       this.status = "live";
       this.presence.joined();
       this.notify();
+      for (const fn of [...this.joinedListeners]) fn();
       void this.flush();
     } finally {
       this.joining = false;
@@ -253,6 +270,57 @@ export class BoardSync {
   /** Tab hiện/ẩn, mở/đóng hộp thoại thẻ: báo cho người khác (chỉ gửi khi thật sự đổi). */
   setPresence(patch: Partial<PresenceState>) {
     this.presence.set(patch);
+  }
+
+  // ---------- Ghi chú (tuần 5) ----------
+
+  /** Lấy (hoặc tạo) đồng bộ ghi chú của một thẻ. Mỗi lần acquire phải có một lần release. */
+  acquireNote(cardId: string, me: { id: string; name: string; color: string }): NoteSync {
+    const existing = this.notes.get(cardId);
+    if (existing) {
+      existing.refs++;
+      existing.off?.();
+      existing.off = undefined;
+      return existing.sync;
+    }
+    const sync = new NoteSync(cardId, this.socket, me, {
+      isBoardLive: () => this.status === "live" && !this.stopped,
+      onBoardJoined: (fn) => {
+        this.joinedListeners.add(fn);
+        return () => this.joinedListeners.delete(fn);
+      },
+      onTyping: (typing) => this.presence.set({ typing }),
+      onRejected: (error) => this.events.onNoteRejected(cardId, error),
+    });
+    this.notes.set(cardId, { sync, refs: 1 });
+    sync.start();
+    return sync;
+  }
+
+  releaseNote(cardId: string) {
+    const entry = this.notes.get(cardId);
+    if (!entry || --entry.refs > 0) return;
+    const close = () => {
+      if (this.notes.get(cardId) !== entry || entry.refs > 0) return;
+      entry.off?.();
+      this.notes.delete(cardId);
+      entry.sync.stop();
+      this.notify();
+    };
+    if (!entry.sync.hasUnsynced) {
+      close();
+      return;
+    }
+    // Còn chữ chưa tới server: giữ lại tới khi gửi xong.
+    entry.off = entry.sync.onSettled(close);
+    this.notify();
+  }
+
+  /** Số ghi chú còn thay đổi chưa tới server (để cảnh báo trước khi đóng tab). */
+  get unsyncedNotes(): number {
+    let n = 0;
+    for (const { sync } of this.notes.values()) if (sync.hasUnsynced) n++;
+    return n;
   }
 
   // ---------- Gửi thao tác ----------

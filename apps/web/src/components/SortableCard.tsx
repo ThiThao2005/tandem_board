@@ -4,12 +4,15 @@ import { CSS } from "@dnd-kit/utilities";
 import type { CSSProperties, HTMLAttributes } from "react";
 import { formatDue } from "../format";
 import { Avatar } from "./Avatar";
+import { ChecklistProgress } from "./CardDialog";
 
 /** Một người khác đang mở thẻ để sửa (tuần 4). */
 export interface Editor {
   member: Member;
   /** Tab của người đó đang bị ẩn. */
   away: boolean;
+  /** Đang gõ ghi chú của thẻ này (tuần 5). */
+  typing: boolean;
 }
 
 /** "Bình", "Bình and An", "Bình, An and Chi" */
@@ -28,9 +31,11 @@ export function CardFace(
   // Viền theo màu của người đang sửa; tất cả đều đang ẩn tab thì viền đứt nét.
   const editingStyle = editing ? ({ "--editor-color": editors[0]!.member.avatarColor } as CSSProperties) : undefined;
   const allAway = editing && editors.every((e) => e.away);
+  const typing = editing && editors.some((e) => e.typing);
+  const note = card.note;
   return (
     <div
-      className={`card ${overlay ? "is-overlay" : ""} ${editing ? "is-being-edited" : ""} ${allAway ? "is-editor-away" : ""} ${className ?? ""}`}
+      className={`card ${overlay ? "is-overlay" : ""} ${editing ? "is-being-edited" : ""} ${allAway ? "is-editor-away" : ""} ${typing ? "is-editor-typing" : ""} ${className ?? ""}`}
       style={{ ...editingStyle, ...style }}
       {...rest}
     >
@@ -42,8 +47,14 @@ export function CardFace(
         </span>
       )}
       <span className="card-title">{card.title}</span>
-      {(due || assignee) && (
+      {(due || assignee || note) && (
         <span className="card-meta">
+          {note?.hasText && (
+            <span className="chip chip-note" title="Has notes" aria-label="Has notes">
+              ≡
+            </span>
+          )}
+          {note && note.total > 0 && <ChecklistProgress done={note.done} total={note.total} compact />}
           {due && <span className={`chip ${due.overdue ? "chip-overdue" : ""}`}>⏱ {due.label}</span>}
           {assignee && <Avatar name={assignee.displayName} color={assignee.avatarColor} size={22} />}
         </span>
@@ -81,7 +92,11 @@ export function SortableCard(props: {
         {...listeners}
         role="button"
         tabIndex={0}
-        aria-label={editors.length > 0 ? `${card.title} (${joinNames(editors)} editing)` : card.title}
+        aria-label={
+          editors.length > 0
+            ? `${card.title} (${joinNames(editors)} ${editors.some((e) => e.typing) ? "typing" : "editing"})`
+            : card.title
+        }
         onClick={() => onOpen(card.id)}
         onKeyDown={(e) => {
           listeners?.onKeyDown?.(e);

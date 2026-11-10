@@ -15,10 +15,21 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@tandem/shared": "*",
     "@tanstack/react-query": "^5.80.0",
+    "@tiptap/core": "^3.33.0",
+    "@tiptap/extension-collaboration": "^3.33.0",
+    "@tiptap/extension-collaboration-caret": "^3.33.0",
+    "@tiptap/extension-list": "^3.33.0",
+    "@tiptap/extensions": "^3.33.0",
+    "@tiptap/pm": "^3.33.0",
+    "@tiptap/react": "^3.33.0",
+    "@tiptap/starter-kit": "^3.33.0",
+    "@tiptap/y-tiptap": "^3.2.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router": "^7.6.0",
-    "socket.io-client": "^4.8.4"
+    "socket.io-client": "^4.8.4",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
     "@types/react": "^19.1.0",

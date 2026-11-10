@@ -1,10 +1,15 @@
-import type { Card, Column, Member } from "@tandem/shared";
-import { useEffect, useRef, type CSSProperties } from "react";
+import type { Card, Column, Member, User } from "@tandem/shared";
+import { lazy, Suspense, useEffect, useRef, type CSSProperties } from "react";
 import type { CardPatch, useBoardActions } from "../pages/BoardPage";
 import { toneVars, type Tone } from "../palette";
+import type { BoardSync } from "../sync/boardSync";
+import { useNote } from "../sync/useNote";
 import { Avatar } from "./Avatar";
 import { InlineEdit } from "./InlineEdit";
 import { joinNames, type Editor } from "./SortableCard";
+
+// TipTap + ProseMirror nặng (~700 KB): chỉ tải khi mở thẻ lần đầu, bảng vẫn mở nhanh.
+const NoteEditor = lazy(() => import("./NoteEditor").then((m) => ({ default: m.NoteEditor })));
 
 export function CardDialog(props: {
   card: Card;
@@ -15,10 +20,14 @@ export function CardDialog(props: {
   others: Editor[];
   canEdit: boolean;
   actions: ReturnType<typeof useBoardActions>;
+  /** Đồng bộ của bảng: ghi chú (tuần 5) dùng chung kết nối với bảng. */
+  sync: BoardSync | null;
+  me: User;
   onClose: () => void;
 }) {
-  const { card, columns, tone, members, others, canEdit, actions, onClose } = props;
+  const { card, columns, tone, members, others, canEdit, actions, sync, me, onClose } = props;
   const ref = useRef<HTMLDialogElement>(null);
+  const { note, state: noteState } = useNote(sync, card.id, { id: me.id, name: me.displayName, color: me.avatarColor });
 
   useEffect(() => {
     const dialog = ref.current;
@@ -63,6 +72,7 @@ export function CardDialog(props: {
                 {joinNames(others)} {others.length === 1 ? "is" : "are"} also editing this card
                 {others.every((e) => e.away) ? " (away)" : ""}.
               </span>
+              {others.some((e) => e.typing) && <span className="typing-pill">typing in notes</span>}
             </>
           )}
         </div>
@@ -110,7 +120,19 @@ export function CardDialog(props: {
           </label>
         </div>
 
-        <div className="dialog-note muted small">Collaborative notes are coming in week 5.</div>
+        <section className="dialog-notes" aria-label="Notes">
+          <div className="dialog-notes-head">
+            <h3>Notes</h3>
+            {card.note && card.note.total > 0 && <ChecklistProgress done={card.note.done} total={card.note.total} />}
+          </div>
+          {note ? (
+            <Suspense fallback={<div className="note note-loading muted small">Loading editor…</div>}>
+              <NoteEditor note={note} state={noteState} canEdit={canEdit} onEscape={() => ref.current?.close()} />
+            </Suspense>
+          ) : (
+            <div className="note note-loading muted small">Loading notes…</div>
+          )}
+        </section>
 
         {canEdit && (
           <div className="dialog-foot">
@@ -128,5 +150,27 @@ export function CardDialog(props: {
         )}
       </div>
     </dialog>
+  );
+}
+
+/** Thanh tiến độ checklist: "2/5" + vạch đầy dần, xanh khi xong hết. */
+export function ChecklistProgress({ done, total, compact = false }: { done: number; total: number; compact?: boolean }) {
+  const complete = total > 0 && done === total;
+  return (
+    <span
+      className={`checklist-progress ${complete ? "is-complete" : ""} ${compact ? "is-compact" : ""}`}
+      title={`${done} of ${total} checklist items done`}
+      aria-label={`${done} of ${total} checklist items done`}
+    >
+      <span className="checklist-icon" aria-hidden>
+        ☑
+      </span>
+      {done}/{total}
+      {!compact && (
+        <span className="checklist-bar" aria-hidden>
+          <span style={{ width: `${(done / total) * 100}%` }} />
+        </span>
+      )}
+    </span>
   );
 }
