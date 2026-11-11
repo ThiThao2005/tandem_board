@@ -24,10 +24,12 @@
     "@tiptap/react": "^3.33.0",
     "@tiptap/starter-kit": "^3.33.0",
     "@tiptap/y-tiptap": "^3.2.0",
+    "idb": "^8.0.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router": "^7.6.0",
     "socket.io-client": "^4.8.4",
+    "y-indexeddb": "^9.0.12",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.33"
   },

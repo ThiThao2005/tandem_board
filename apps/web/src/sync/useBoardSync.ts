@@ -3,7 +3,15 @@ import { useMe } from "../auth";
 import { getSocket } from "../realtime";
 import { BoardSync, type SyncEvents, type SyncSnapshot } from "./boardSync";
 
-const EMPTY: SyncSnapshot = { status: "connecting", board: null, pending: 0, error: null, presence: [] };
+const EMPTY: SyncSnapshot = {
+  status: "connecting",
+  board: null,
+  pending: 0,
+  error: null,
+  presence: [],
+  failed: [],
+  durable: true,
+};
 const noopSubscribe = () => () => {};
 
 /**
@@ -18,7 +26,6 @@ export function useBoardSync(boardId: string, events: SyncEvents): { sync: Board
 
   useEffect(() => {
     const s = new BoardSync(boardId, getSocket(), me.id, {
-      onRejected: (req, err) => eventsRef.current.onRejected(req, err),
       onRemoteOp: (op) => eventsRef.current.onRemoteOp(op),
       onNoteRejected: (cardId, err) => eventsRef.current.onNoteRejected(cardId, err),
     });
@@ -39,7 +46,8 @@ export function useBoardSync(boardId: string, events: SyncEvents): { sync: Board
     return () => document.removeEventListener("visibilitychange", update);
   }, [sync]);
 
-  // Còn ghi chú chưa tới server (đang mất mạng) mà đóng tab: hỏi lại trước.
+  // Còn thay đổi chưa tới server mà KHÔNG lưu được xuống đĩa (IndexedDB bị chặn) mà đóng tab: hỏi lại trước.
+  // Bình thường (tuần 6) mọi thứ chưa gửi đã nằm trên đĩa nên đóng tab không mất gì.
   useEffect(() => {
     if (!sync) return;
     const warn = (e: BeforeUnloadEvent) => {

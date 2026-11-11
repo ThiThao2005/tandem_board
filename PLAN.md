@@ -115,13 +115,13 @@ Người khác:  seq == lastSeq + 1 thì áp dụng ngay
 - [x] Kéo thẻ nhiều lần vào cùng một khe làm chuỗi vị trí dài ra (sắp xếp lại cột)
 - [x] Gửi lại một thao tác đã tới server (opId trùng)
 - [x] Tin nhắn đến sai thứ tự hoặc thiếu seq
-- [ ] Offline 2 ngày, lỡ hàng nghìn thao tác (gửi ảnh chụp)
+- [x] Offline 2 ngày, lỡ hàng nghìn thao tác (gửi ảnh chụp)
 - [x] Bị mất quyền khi vẫn đang kết nối
 - [x] Token hết hạn khi socket còn mở
 - [x] Tab ẩn lâu, heartbeat trễ, bị coi là offline nhầm
 - [x] Gửi thao tác vào bảng của nhóm khác (IDOR: boardId hợp lệ + cardId của nhóm khác)
 - [x] Hai thao tác commit lệch thứ tự seq (lý do phải đánh seq theo từng bảng)
-- [ ] Cùng một người mở 2 tab, cả hai cùng gửi hàng đợi
+- [x] Cùng một người mở 2 tab, cả hai cùng gửi hàng đợi
 
 ## 7. Kiểm thử
 

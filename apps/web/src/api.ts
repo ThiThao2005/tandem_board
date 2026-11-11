@@ -47,14 +47,40 @@ export class ApiError extends Error {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Không gọi được server khi làm mới phiên: mất mạng, server đang khởi động lại, hoặc lỗi 5xx (proxy của Vite trả 500
+ * khi API chưa chạy). KHÔNG phải hết phiên: cookie refresh vẫn còn, có mạng / server sống lại là làm mới được.
+ * Trước đây trường hợp này bị coi như hết phiên → bị đẩy ra trang đăng nhập (giữa phiên, ở lần tự làm mới mỗi
+ * ~14 phút), hoặc kẹt "Loading…" mãi khi tải trang lúc đang offline (fetch ném lỗi mà không ai bắt).
+ */
+export class ServerUnreachable extends Error {
+  constructor() {
+    super("Can't reach the server");
+  }
+}
+
 async function doRefresh(): Promise<AuthResult | null> {
+  let unreachable = false;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch("/api/auth/refresh", { method: "POST" });
+    let res: Response;
+    try {
+      res = await fetch("/api/auth/refresh", { method: "POST" });
+    } catch {
+      unreachable = true; // mất mạng
+      await sleep(500 * 2 ** attempt);
+      continue;
+    }
     if (res.ok) {
       const data = (await res.json()) as AuthResult;
       setToken(data.accessToken);
       return data;
     }
+    if (res.status >= 500) {
+      unreachable = true; // server lỗi / đang khởi động lại
+      await sleep(500 * 2 ** attempt);
+      continue;
+    }
+    unreachable = false;
     const body = (await res.json().catch(() => null)) as ApiErrorBody | null;
     // Tab khác vừa làm mới xong và đã ghi cookie mới → chờ một chút rồi thử lại.
     if (body?.error.code === "refresh_race") {
@@ -63,6 +89,8 @@ async function doRefresh(): Promise<AuthResult | null> {
     }
     break;
   }
+  // Giữ nguyên access token đang có: có thể vẫn còn hạn, và phiên chưa hề mất.
+  if (unreachable) throw new ServerUnreachable();
   setToken(null);
   return null;
 }
@@ -93,7 +121,15 @@ export async function api<T>(path: string, { method = "GET", body }: Options = {
 
   let res = await send();
   if (res.status === 401 && !path.startsWith("/auth/")) {
-    if (await refreshSession()) {
+    let refreshed: AuthResult | null;
+    try {
+      refreshed = await refreshSession();
+    } catch (err) {
+      // Không làm mới được vì mất mạng / server lỗi: báo lỗi cho lần gọi này, KHÔNG đăng xuất.
+      if (err instanceof ServerUnreachable) throw new ApiError(0, "unreachable", "Can't reach the server");
+      throw err;
+    }
+    if (refreshed) {
       res = await send();
     } else {
       onSessionLost();

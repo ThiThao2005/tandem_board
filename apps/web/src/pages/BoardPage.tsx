@@ -22,6 +22,7 @@ import { Link, useParams } from "react-router";
 import { useMe } from "../auth";
 import { Avatar } from "../components/Avatar";
 import { CardDialog } from "../components/CardDialog";
+import { FailedChanges } from "../components/FailedChanges";
 import { InlineEdit } from "../components/InlineEdit";
 import { CardFace, SortableCard, type Editor } from "../components/SortableCard";
 import { toneAt, toneVars, type Tone } from "../palette";
@@ -38,16 +39,10 @@ export interface MoveIntent {
 
 export type CardPatch = Partial<Pick<Card, "title" | "dueDate" | "assigneeId" | "columnId">>;
 
-const FIELD_LABEL: Record<string, string> = {
-  title: "title",
-  dueDate: "due date",
-  assigneeId: "assignee",
-  columnId: "column",
-};
-
 /**
  * Mọi thay đổi đi qua WebSocket dưới dạng thao tác (op): hiện ngay trên màn hình (lạc quan), server
- * quyết định rồi phát cho mọi người. Server từ chối thì bảng tự về đúng trạng thái và hiện thông báo.
+ * quyết định rồi phát cho mọi người. Server từ chối thì bảng tự về đúng trạng thái và thay đổi đó vào danh sách
+ * "không áp dụng được" (FailedChanges) để người dùng xem, thử lại hoặc bỏ qua.
  */
 export function useBoardActions(sync: BoardSync | null, boardId: string) {
   const toast = useToast();
@@ -110,6 +105,7 @@ export function BoardPage() {
   const { boardId = "" } = useParams();
   const me = useMe();
   const [openCardId, setOpenCardId] = useState<string | null>(null);
+  const [reviewFailed, setReviewFailed] = useState(false);
   const toast = useToast();
   const openCardRef = useRef(openCardId);
   openCardRef.current = openCardId;
@@ -118,28 +114,6 @@ export function BoardPage() {
   const membersRef = useRef<Member[]>([]);
 
   const { sync, state } = useBoardSync(boardId, {
-    onRejected: (req, err) => {
-      const actions = actionsRef.current;
-      if (err.code === "card_deleted") {
-        const cardId = (err.details as { cardId?: string } | undefined)?.cardId;
-        toast({
-          message: `${err.message}. Your change wasn't saved.`,
-          tone: "error",
-          action: cardId && actions ? { label: "Restore", run: () => actions.restore(cardId) } : undefined,
-        });
-      } else if (err.code === "version_conflict" && req.type === "card.update") {
-        const { fields = [], card } = (err.details ?? {}) as { fields?: string[]; card?: Card };
-        const { cardId: _id, baseVersion: _v, ...patch } = req.payload;
-        const what = fields.map((f) => FIELD_LABEL[f] ?? f).join(" and ") || "card";
-        toast({
-          message: `Someone else just changed the ${what}${card ? ` of “${card.title}”` : ""}. Your change wasn't saved.`,
-          tone: "error",
-          action: card && actions ? { label: "Use mine", run: () => actions.updateCard(card, patch, true) } : undefined,
-        });
-      } else {
-        toast({ message: err.message, tone: "error" });
-      }
-    },
     onNoteRejected: (_cardId, err) => {
       const message =
         err.code === "forbidden"
@@ -167,6 +141,27 @@ export function BoardPage() {
   membersRef.current = state.board?.members ?? [];
   const view = state.board;
   const canEdit = view ? view.role !== "viewer" : false;
+
+  // Có thay đổi mới bị server từ chối (thường gặp lúc vừa có mạng lại): báo ngay, dẫn tới danh sách để xem.
+  // Danh sách nạp từ đĩa lúc mở bảng cũng đi qua đây, nên tải lại trang vẫn thấy.
+  const failedCount = state.failed.length;
+  const seenFailed = useRef(0);
+  useEffect(() => {
+    if (failedCount <= seenFailed.current) {
+      seenFailed.current = failedCount;
+      return;
+    }
+    // Chờ một chút: gửi bù cả hàng dài thì nhiều thay đổi bị từ chối dồn dập, chỉ cần MỘT thông báo.
+    const timer = setTimeout(() => {
+      seenFailed.current = failedCount;
+      toast({
+        message: failedCount === 1 ? "1 change couldn't be applied." : `${failedCount} changes couldn't be applied.`,
+        tone: "error",
+        action: { label: "Review", run: () => setReviewFailed(true) },
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [failedCount, toast]);
 
   // Mở thẻ (khi có quyền sửa) thì báo cho người khác để thẻ được tô viền bên họ.
   useEffect(() => {
@@ -320,7 +315,13 @@ export function BoardPage() {
         />
         <PresenceBar members={members} presence={state.presence} meId={me.id} connected={state.status === "live"} />
         {!canEdit && <span className="badge">View only</span>}
-        <SyncBadge status={state.status} pending={state.pending} />
+        <SyncBadge status={state.status} pending={state.pending} durable={state.durable} />
+        {failedCount > 0 && (
+          <button className="failed-badge" onClick={() => setReviewFailed(true)}>
+            <span aria-hidden>⚠</span>{" "}
+            {failedCount === 1 ? "1 change couldn't be applied" : `${failedCount} changes couldn't be applied`}
+          </button>
+        )}
       </div>
 
       <DndContext
@@ -369,6 +370,10 @@ export function BoardPage() {
           )}
         </DragOverlay>
       </DndContext>
+
+      {reviewFailed && failedCount > 0 && (
+        <FailedChanges failed={state.failed} sync={sync} onClose={() => setReviewFailed(false)} />
+      )}
 
       {openCard && (
         <CardDialog
@@ -427,7 +432,7 @@ function PresenceBar(props: { members: Member[]; presence: PresenceUser[]; meId:
 }
 
 /** Trạng thái kết nối: người dùng biết thay đổi của mình đã tới server chưa. */
-function SyncBadge({ status, pending }: { status: SyncStatus; pending: number }) {
+function SyncBadge({ status, pending, durable }: { status: SyncStatus; pending: number; durable: boolean }) {
   const [label, tone] =
     status === "live"
       ? pending > 0
@@ -436,8 +441,14 @@ function SyncBadge({ status, pending }: { status: SyncStatus; pending: number })
       : status === "reconnecting"
         ? [pending > 0 ? `Offline · ${pending} unsent` : "Reconnecting…", "offline"]
         : ["Connecting…", "offline"];
+  const hint =
+    pending > 0
+      ? durable
+        ? "Saved on this device. It will be sent as soon as you're back online, even if you close the tab."
+        : "This browser won't let us keep unsent changes on this device. Don't close the tab until they're sent."
+      : undefined;
   return (
-    <span className={`sync-badge sync-${tone}`} role="status" aria-live="polite">
+    <span className={`sync-badge sync-${tone}`} role="status" aria-live="polite" title={hint}>
       <span className="sync-dot" aria-hidden />
       {label}
     </span>
