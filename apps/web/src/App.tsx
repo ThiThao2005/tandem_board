@@ -12,6 +12,15 @@ function RequireAuth({ children }: { children: ReactNode }) {
   const { state } = useAuth();
   const location = useLocation();
   if (state.status === "loading") return <div className="splash">Loading…</div>;
+  if (state.status === "unreachable") {
+    return (
+      <div className="splash" role="status" aria-live="polite">
+        Can't reach the server. Retrying…
+        <br />
+        <span className="muted small">Your unsent changes are saved on this device.</span>
+      </div>
+    );
+  }
   if (state.status === "anon") {
     const next = encodeURIComponent(location.pathname + location.search);
     return <Navigate to={`/login?next=${next}`} replace />;

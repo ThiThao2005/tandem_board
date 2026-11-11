@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { useAuth, useMe } from "../auth";
+import { countUnsent } from "../sync/offlineStore";
 import { Avatar } from "./Avatar";
 
 export function Logo() {
@@ -18,6 +19,16 @@ export function Logo() {
 export function Layout({ children }: { children: ReactNode }) {
   const me = useMe();
   const { logout } = useAuth();
+
+  async function signOut() {
+    // Thay đổi chưa gửi nằm trên máy này; đăng xuất là xóa chúng (người dùng sau cùng trình duyệt không được đọc).
+    const unsent = await countUnsent(me.id);
+    if (unsent > 0 && !confirm(`${unsent} ${unsent === 1 ? "change hasn't" : "changes haven't"} reached the server yet. Signing out will discard ${unsent === 1 ? "it" : "them"}. Sign out anyway?`)) {
+      return;
+    }
+    await logout();
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -27,7 +38,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="topbar-user">
           <Avatar name={me.displayName} color={me.avatarColor} />
           <span className="topbar-name">{me.displayName}</span>
-          <button className="btn btn-ghost btn-sm" onClick={logout}>
+          <button className="btn btn-ghost btn-sm" onClick={() => void signOut()}>
             Sign out
           </button>
         </div>

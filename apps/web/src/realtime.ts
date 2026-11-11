@@ -33,16 +33,37 @@ function scheduleRefresh(token: string | null) {
   const exp = token ? expiresAt(token) : null;
   if (exp === null) return;
   const delay = Math.max(5_000, exp - Date.now() - 60_000);
-  refreshTimer = setTimeout(() => {
-    void refreshSession().then((r) => {
-      if (!r) sessionLost();
-    });
-  }, delay);
+  const run = () => {
+    refreshSession().then(
+      (r) => {
+        if (!r) sessionLost();
+      },
+      // Mất mạng / server lỗi đúng lúc làm mới: KHÔNG đăng xuất, thử lại sau. Token có hết hạn trong lúc chờ thì
+      // socket sẽ bị ngắt và reconnectWithFreshToken làm mới khi có mạng lại.
+      () => {
+        refreshTimer = setTimeout(run, REFRESH_RETRY_MS);
+      },
+    );
+  };
+  refreshTimer = setTimeout(run, delay);
 }
 
-/** Làm mới token rồi kết nối lại; hết phiên thì báo đăng xuất. */
+/** Làm mới token thất bại vì không gọi được server thì thử lại sau chừng này. */
+const REFRESH_RETRY_MS = 30_000;
+const RECONNECT_RETRY_MS = 3_000;
+
+/** Làm mới token rồi kết nối lại; hết phiên thì báo đăng xuất; không gọi được server thì thử lại sau. */
 async function reconnectWithFreshToken(s: TandemSocket) {
-  const r = await refreshSession();
+  let r;
+  try {
+    r = await refreshSession();
+  } catch {
+    // Mất mạng / server đang khởi động lại: phiên chưa mất. Thử lại nếu socket này vẫn còn dùng (chưa đăng xuất).
+    setTimeout(() => {
+      if (socket === s && !s.connected) void reconnectWithFreshToken(s);
+    }, RECONNECT_RETRY_MS);
+    return;
+  }
   if (r) s.connect();
   else sessionLost();
 }
@@ -67,7 +88,7 @@ export function getSocket(): TandemSocket {
     if (reason === "io server disconnect") void reconnectWithFreshToken(s);
   });
 
-  stopListening = onAccessToken((token) => {
+  const stopToken = onAccessToken((token) => {
     scheduleRefresh(token);
     if (token && s.connected) {
       s.emit("auth.refresh", token, (res) => {
@@ -76,6 +97,20 @@ export function getSocket(): TandemSocket {
     }
   });
   scheduleRefresh(getAccessToken());
+
+  // Tuần 6: trình duyệt báo mất/có mạng thì phản ứng ngay, không chờ ping hết hạn (~45 giây) mới biết kết nối đã chết,
+  // trong lúc đó giao diện vẫn báo "Saving…" dù thực ra đang offline.
+  const onOffline = () => s.io.engine?.close();
+  const onOnline = () => {
+    if (!s.connected) s.connect();
+  };
+  window.addEventListener("offline", onOffline);
+  window.addEventListener("online", onOnline);
+  stopListening = () => {
+    stopToken();
+    window.removeEventListener("offline", onOffline);
+    window.removeEventListener("online", onOnline);
+  };
 
   s.connect();
   socket = s;

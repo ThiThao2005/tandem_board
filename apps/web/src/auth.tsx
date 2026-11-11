@@ -1,10 +1,22 @@
 import type { AuthResult, LoginInput, RegisterInput, User } from "@tandem/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, refreshSession, setAccessToken, setSessionLostHandler } from "./api";
+import { api, refreshSession, ServerUnreachable, setAccessToken, setSessionLostHandler } from "./api";
 import { closeSocket } from "./realtime";
+import { wipeOfflineData } from "./sync/offlineStore";
 
-type AuthState = { status: "loading" } | { status: "anon" } | { status: "authed"; user: User };
+/**
+ * unreachable: chưa biết đã đăng nhập hay chưa vì không gọi được server (mất mạng, server đang khởi động lại).
+ * Không đẩy ra trang đăng nhập (cookie phiên vẫn còn), mà thử lại cho tới khi gọi được.
+ */
+type AuthState =
+  | { status: "loading" }
+  | { status: "unreachable" }
+  | { status: "anon" }
+  | { status: "authed"; user: User };
+
+/** Không gọi được server lúc mở app: thử lại sau chừng này (và ngay khi trình duyệt báo có mạng). */
+const UNREACHABLE_RETRY_MS = 3_000;
 
 interface AuthContextValue {
   state: AuthState;
@@ -24,7 +36,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       closeSocket();
       setState({ status: "anon" });
     });
-    refreshSession().then((r) => setState(r ? { status: "authed", user: r.user } : { status: "anon" }));
+    let cancelled = false;
+    let waiting = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = () => {
+      clearTimeout(timer);
+      waiting = false;
+      refreshSession().then(
+        (r) => {
+          if (!cancelled) setState(r ? { status: "authed", user: r.user } : { status: "anon" });
+        },
+        (err: unknown) => {
+          if (cancelled) return;
+          if (!(err instanceof ServerUnreachable)) {
+            setState({ status: "anon" });
+            return;
+          }
+          setState({ status: "unreachable" });
+          waiting = true;
+          timer = setTimeout(attempt, UNREACHABLE_RETRY_MS);
+        },
+      );
+    };
+    // Có mạng lại thì thử ngay, không chờ hết hẹn giờ.
+    const onOnline = () => {
+      if (waiting) attempt();
+    };
+    window.addEventListener("online", onOnline);
+    attempt();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      window.removeEventListener("online", onOnline);
+    };
   }, []);
 
   const accept = useCallback((r: AuthResult) => {
@@ -40,6 +84,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout: async () => {
         await api("/auth/logout", { method: "POST" }).catch(() => {});
         closeSocket();
+        // Đăng xuất chủ động: xóa dữ liệu offline trên máy này (hàng đợi, ghi chú đã lưu) để người dùng sau không đọc được.
+        // Mất phiên do hết hạn thì KHÔNG xóa: đăng nhập lại là gửi tiếp được.
+        await wipeOfflineData();
         setAccessToken(null);
         queryClient.clear();
         setState({ status: "anon" });

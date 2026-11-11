@@ -12,6 +12,8 @@ export default defineConfig({
   optimizeDeps: {
     include: [
       "yjs",
+      "y-indexeddb",
+      "idb",
       "y-protocols/awareness",
       "@tiptap/react",
       "@tiptap/starter-kit",

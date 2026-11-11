@@ -7,6 +7,7 @@ import {
 import { applyAwarenessUpdate, Awareness, encodeAwarenessUpdate, removeAwarenessStates } from "y-protocols/awareness";
 import * as Y from "yjs";
 import type { TandemSocket } from "../realtime";
+import { persistNote, type NotePersistence } from "./noteStore";
 
 /*
  * Đồng bộ ghi chú của MỘT thẻ (tuần 5) qua kết nối Socket.IO dùng chung với bảng.
@@ -20,6 +21,9 @@ import type { TandemSocket } from "../realtime";
  *  - Server từ chối (bị hạ xuống viewer, ghi chú quá dài, dữ liệu hỏng): bản của mình đã lệch khỏi server mà
  *    CRDT không "rút lại" được thay đổi, nên bỏ Y.Doc cũ, tạo Y.Doc mới rồi tải lại từ server (`docVersion` tăng,
  *    editor được tạo lại).
+ *  - Tuần 6: Y.Doc được lưu xuống IndexedDB (y-indexeddb). Đóng tab / tải lại trang lúc đang offline không mất chữ:
+ *    lần mở lại, state vector của Y.Doc đã nạp từ đĩa cho biết server còn thiếu gì và gửi bù. Phải nạp xong từ đĩa
+ *    RỒI MỚI mở với server, nếu không phần chỉ có trên đĩa sẽ không nằm trong state vector và không bao giờ được gửi.
  */
 
 export type NoteStatus = "connecting" | "synced" | "saving" | "offline" | "closed";
@@ -54,6 +58,11 @@ export interface NoteHooks {
   onTyping(typing: boolean): void;
   /** Server từ chối thay đổi của mình: phần chưa lưu bị bỏ. */
   onRejected(error: SocketErrorBody): void;
+  /**
+   * Ghi chú có / hết chữ chưa tới server (xem pendingNotes.ts). true khi có chữ chưa gửi; false CHỈ khi server đã xác
+   * nhận đồng bộ xong (hoặc thẻ đã bị xóa hẳn) — mở lại lúc còn offline thì chưa biết, không báo gì.
+   */
+  onPendingChange?(pending: boolean): void;
 }
 
 /** Origin của thay đổi đến từ server: không gửi ngược lên. */
@@ -92,6 +101,8 @@ export class NoteSync {
   private lastAwarenessAt = 0;
   private offs: (() => void)[] = [];
   private docOffs: (() => void)[] = [];
+  /** Bản lưu của Y.Doc hiện tại trên đĩa (null nếu trình duyệt không cho dùng IndexedDB). */
+  private persistence: NotePersistence | null = null;
 
   constructor(
     readonly cardId: string,
@@ -121,6 +132,11 @@ export class NoteSync {
     return this.unsynced;
   }
 
+  /** Thay đổi chưa gửi có được lưu xuống đĩa không (nếu không thì đóng tab là mất). */
+  get durable(): boolean {
+    return this.persistence !== null;
+  }
+
   private makeSnapshot(): NoteSnapshot {
     return {
       status: this.status,
@@ -132,7 +148,22 @@ export class NoteSync {
     };
   }
 
+  /** Lần cuối đã báo onPendingChange (null = chưa báo). */
+  private reportedPending: boolean | null = null;
+
+  private reportPending() {
+    const pending = this.unsynced
+      ? true
+      : this.status === "synced" || (this.status === "closed" && this.closedReason === "card_deleted")
+        ? false
+        : null; // đang mở / offline: chưa biết server còn thiếu gì
+    if (pending === null || pending === this.reportedPending) return;
+    this.reportedPending = pending;
+    this.hooks.onPendingChange?.(pending);
+  }
+
   private notify() {
+    this.reportPending();
     const next = this.makeSnapshot();
     const s = this.snapshot;
     if (
@@ -203,6 +234,7 @@ export class NoteSync {
         if (!this.opened && this.status !== "closed") void this.open();
       }),
     ];
+    this.persistence = persistNote(this.me.id, this.cardId, this.doc);
     this.bindDoc();
     if (this.hooks.isBoardLive()) void this.open();
   }
@@ -240,7 +272,9 @@ export class NoteSync {
     const doc = this.doc;
     const awareness = this.awareness;
     const onDocUpdate = (update: Uint8Array, origin: unknown) => {
-      if (origin === REMOTE) return;
+      // Từ server, hoặc do nạp lại từ đĩa: không phải thay đổi mới của mình. Phần chỉ có trên đĩa mà server còn
+      // thiếu được tính ở `open` (state vector), không đi qua đây.
+      if (origin === REMOTE || (this.persistence !== null && origin === this.persistence.origin)) return;
       this.queue.push(update);
       this.unsynced = true;
       this.pulseTyping();
@@ -275,6 +309,8 @@ export class NoteSync {
     const generation = this.generation;
     const doc = this.doc;
     try {
+      await this.persistence?.loaded;
+      if (this.stopped || generation !== this.generation || doc !== this.doc || !this.socket.connected) return;
       const res = await this.socket
         .timeout(ACK_TIMEOUT_MS)
         .emitWithAck("note.open", { cardId: this.cardId, stateVector: Y.encodeStateVector(doc) })
@@ -367,6 +403,10 @@ export class NoteSync {
     this.hooks.onRejected(error);
     if (this.socket.connected) this.socket.emit("note.close", { cardId: this.cardId });
     const old = { doc: this.doc, awareness: this.awareness };
+    // Bản trên đĩa cũng phải bỏ, nếu không lần mở sau nó sống lại và bị gửi lên rồi bị từ chối mãi. Phải xóa XONG
+    // rồi mới mở bản lưu mới cùng tên (yêu cầu xóa phải tới IndexedDB trước yêu cầu mở).
+    const cleared = this.persistence?.clear() ?? Promise.resolve();
+    this.persistence = null;
     this.doc = new Y.Doc();
     this.awareness = new Awareness(this.doc);
     this.bindDoc();
@@ -377,7 +417,12 @@ export class NoteSync {
       old.awareness.destroy();
       old.doc.destroy();
     }, 0);
-    void this.open();
+    const doc = this.doc;
+    void cleared.then(() => {
+      if (this.stopped || doc !== this.doc) return;
+      this.persistence = persistNote(this.me.id, this.cardId, doc);
+      void this.open();
+    });
   }
 
   // ---------- Con trỏ / đang gõ ----------
