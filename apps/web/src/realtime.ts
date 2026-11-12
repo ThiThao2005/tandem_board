@@ -70,7 +70,10 @@ async function reconnectWithFreshToken(s: TandemSocket) {
 
 export function getSocket(): TandemSocket {
   if (socket) return socket;
-  const s: TandemSocket = io({
+  // Khi deploy, web (Vercel) và server (Render) khác domain: Vercel không chuyển tiếp được WebSocket,
+  // nên socket nối thẳng tới server. Để trống (dev) thì dùng cùng domain qua proxy của Vite.
+  const socketUrl: string | undefined = import.meta.env.VITE_SOCKET_URL || undefined;
+  const s: TandemSocket = io(socketUrl, {
     autoConnect: false,
     // Chỉ WebSocket: không cần sticky session khi chạy nhiều server ở tuần 8.
     transports: ["websocket"],

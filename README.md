@@ -44,6 +44,28 @@ npm test
 
 Test gồm cả test realtime (mở server Socket.IO thật trên cổng ngẫu nhiên) và test hội tụ: 3 client cùng bắn thao tác ngẫu nhiên, cuối cùng phải thấy bảng giống hệt server.
 
+## Deploy
+
+```
+trình duyệt ── trang web, /api/* ──▶ Vercel ── chuyển tiếp /api/* ──▶ Render (Node + Socket.IO) ──▶ Supabase (Postgres)
+            └──────────── WebSocket (nối thẳng) ─────────────────────▶ Render
+```
+
+Vercel chỉ chạy được trang tĩnh và hàm serverless, **không giữ được kết nối WebSocket**, nên server chạy trên Render.
+`/api` vẫn đi qua Vercel để cookie refresh token nằm cùng domain với trang; riêng socket nối thẳng tới Render
+(xác thực bằng access token gửi lúc kết nối, không dùng cookie), và server chỉ nhận socket từ domain trong `CLIENT_ORIGIN`.
+
+1. **Render** → New → **Blueprint** → chọn repo này (đọc [`render.yaml`](render.yaml)). Điền:
+   - `DATABASE_URL`: chuỗi **Session pooler** (cổng 5432) của Supabase.
+   - `CLIENT_ORIGIN`: domain Vercel (điền tạm, sửa lại sau bước 2).
+   - `JWT_SECRET` được Render tự sinh. Migration tự chạy mỗi lần server khởi động.
+2. **Vercel** → Add New → Project → chọn repo này, **Root Directory để nguyên** (gốc repo; cấu hình build nằm trong [`vercel.json`](vercel.json)).
+   Thêm biến `VITE_SOCKET_URL` = địa chỉ Render, ví dụ `https://tandem-api.onrender.com`.
+3. Nếu địa chỉ Render khác `tandem-api.onrender.com` thì sửa dòng `/api` trong `vercel.json`.
+   Nếu domain Vercel khác giá trị đã điền thì sửa `CLIENT_ORIGIN` trên Render.
+
+Render gói Free ngủ sau 15 phút không có ai dùng; lần mở đầu tiên chờ khoảng 1 phút để server thức dậy.
+
 ## Đồng bộ realtime hoạt động thế nào
 
 ```

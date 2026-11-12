@@ -22,6 +22,7 @@ import * as Y from "yjs";
 import { z, ZodError } from "zod";
 import { requireBoard } from "./access";
 import { verifyAccessTokenClaims } from "./auth/tokens";
+import { config } from "./config";
 import { pool } from "./db";
 import { forbidden, HttpError, notFound } from "./errors";
 import { NoteStore } from "./notes";
@@ -349,6 +350,15 @@ export function attachRealtime(http: HttpServer): TandemServer {
     // Ghi chú (tuần 5): một lần dán dài có thể tới NOTE_MAX_UPDATE_BYTES (256 KB) nên nâng lên 512 KB;
     // thao tác bảng vẫn bị zod giới hạn độ dài từng trường.
     maxHttpBufferSize: 512 * 1024,
+    // Web và server khác domain (Vercel + Render): chỉ nhận kết nối từ domain của web.
+    // Trình duyệt không áp CORS cho WebSocket nên phải tự kiểm tra Origin ở đây.
+    ...(config.clientOrigins.length > 0 && {
+      cors: { origin: [...config.clientOrigins] },
+      allowRequest: (req, callback) => {
+        const origin = req.headers.origin;
+        callback(null, !origin || config.clientOrigins.includes(origin));
+      },
+    }),
   });
 
   server.use((socket, next) => {

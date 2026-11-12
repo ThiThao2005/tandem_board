@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.claude
+apps/web/*
+!apps/web/package.json
+docker
+*.md

@@ -23,6 +23,15 @@ export const config = {
   jwtSecret: required("JWT_SECRET"),
   /** API_PORT ưu tiên hơn PORT: một số công cụ tự đặt PORT cho cả tiến trình (cổng của web). */
   port: Number(process.env.API_PORT ?? process.env.PORT ?? 4000),
+  /**
+   * Domain của web khi web và server nằm ở hai nơi khác nhau (vd. web trên Vercel, server trên Render),
+   * phân cách bằng dấu phẩy. Có giá trị thì Socket.IO chỉ nhận kết nối từ các domain này.
+   * Để trống khi web và server cùng domain (dev qua proxy của Vite).
+   */
+  clientOrigins: (process.env.CLIENT_ORIGIN ?? "")
+    .split(",")
+    .map((s) => s.trim().replace(/\/+$/, ""))
+    .filter(Boolean),
   accessTokenTtl: "15m",
   refreshTokenDays: 30,
   /** Hai tab cùng làm mới token trong khoảng này thì không bị coi là đánh cắp token. */

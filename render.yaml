@@ -1,0 +1,20 @@
+# Render Blueprint: API + realtime (Socket.IO) của Tandem.
+# Render → New → Blueprint → chọn repo này. Các biến có `sync: false` sẽ được hỏi khi tạo.
+services:
+  - type: web
+    name: tandem-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    branch: main
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false # chuỗi Session pooler (cổng 5432) của Supabase
+      - key: CLIENT_ORIGIN
+        sync: false # domain web trên Vercel, vd. https://tandem-board.vercel.app
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_POOL_MAX
+        value: "5"
