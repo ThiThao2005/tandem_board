@@ -5,7 +5,7 @@
   "buildCommand": "npm run build -w @tandem/web",
   "outputDirectory": "apps/web/dist",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://tandem-api.onrender.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://tandem-api-zeel.onrender.com/api/:path*" },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
   ]
 }
